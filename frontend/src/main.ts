@@ -7,18 +7,25 @@ import {
   AVRIOPort,
   portBConfig,
   PinState,
+  AVRUSART, // BARU
+  usart0Config, // BARU
 } from "avr8js";
 import { loadHex } from "./intelhex";
 
-const DEFAULT_CODE = `void setup() {
+const DEFAULT_CODE = `int counter = 0;
+
+void setup() {
+  Serial.begin(9600);
+  Serial.println("Halo dari Arduino Sim!");
   pinMode(13, OUTPUT);
 }
 
 void loop() {
-  digitalWrite(13, HIGH);
-  delay(500);
-  digitalWrite(13, LOW);
-  delay(500);
+  counter++;
+  Serial.print("Hitungan: ");
+  Serial.println(counter);
+  digitalWrite(13, counter % 2);
+  delay(1000);
 }
 `;
 
@@ -35,6 +42,11 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     <span>LED Pin 13</span>
   </div>
   <pre id="output"></pre>
+  <div class="serial-header">
+    <span>Serial Monitor</span>
+    <button id="clear">Clear</button>
+  </div>
+  <pre id="serial"></pre>
 `;
 
 const codeEl = document.querySelector<HTMLTextAreaElement>("#code")!;
@@ -43,12 +55,16 @@ const stopBtn = document.querySelector<HTMLButtonElement>("#stop")!;
 const statusEl = document.querySelector<HTMLSpanElement>("#status")!;
 const ledEl = document.querySelector<HTMLDivElement>("#led")!;
 const outputEl = document.querySelector<HTMLPreElement>("#output")!;
+const serialEl = document.querySelector<HTMLPreElement>("#serial")!; // BARU
+const clearBtn = document.querySelector<HTMLButtonElement>("#clear")!; // BARU
 
 codeEl.value = DEFAULT_CODE;
 
 let running = false;
 
-// Kirim kode ke server Python, terima file .hex
+// BARU: batas panjang teks serial supaya browser tidak berat
+const MAX_SERIAL_LENGTH = 10000;
+
 async function compile(code: string): Promise<string> {
   const res = await fetch("http://localhost:8000/compile", {
     method: "POST",
@@ -60,23 +76,26 @@ async function compile(code: string): Promise<string> {
   return data.hex;
 }
 
-// Jalankan file .hex di emulator ATmega328P
 function run(hex: string) {
-  // Flash ATmega328P = 32 KB, disimpan sebagai word 16-bit
   const program = new Uint16Array(0x8000 / 2);
   loadHex(hex, new Uint8Array(program.buffer));
 
   const cpu = new CPU(program);
-  new AVRTimer(cpu, timer0Config); // dibutuhkan oleh delay() dan millis()
+  new AVRTimer(cpu, timer0Config);
   const portB = new AVRIOPort(cpu, portBConfig);
 
-  // Pin 13 di Arduino Uno = bit ke-5 dari PORTB (PB5)
   portB.addListener(() => {
     const on = portB.pinState(5) === PinState.High;
     ledEl.classList.toggle("on", on);
   });
 
-  // Arduino Uno berjalan 16 MHz; browser menggambar ~60 kali per detik
+  // BARU: tiruan USART, frekuensi CPU 16 MHz
+  const usart = new AVRUSART(cpu, usart0Config, 16_000_000);
+  let serialBuffer = "";
+  usart.onByteTransmit = (value: number) => {
+    serialBuffer += String.fromCharCode(value);
+  };
+
   const CYCLES_PER_FRAME = 16_000_000 / 60;
 
   running = true;
@@ -84,9 +103,20 @@ function run(hex: string) {
     if (!running) return;
     const target = cpu.cycles + CYCLES_PER_FRAME;
     while (cpu.cycles < target) {
-      avrInstruction(cpu); // jalankan satu instruksi
-      cpu.tick(); // perbarui timer & interrupt
+      avrInstruction(cpu);
+      cpu.tick();
     }
+
+    // BARU: tampilkan teks serial sekali per frame (lebih ringan
+    // daripada memperbarui tampilan setiap kali ada satu huruf)
+    if (serialBuffer) {
+      serialEl.textContent = (serialEl.textContent + serialBuffer).slice(
+        -MAX_SERIAL_LENGTH,
+      );
+      serialBuffer = "";
+      serialEl.scrollTop = serialEl.scrollHeight; // auto-scroll ke bawah
+    }
+
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
@@ -102,6 +132,7 @@ function stop() {
 runBtn.addEventListener("click", async () => {
   stop();
   outputEl.textContent = "";
+  serialEl.textContent = ""; // BARU: kosongkan serial setiap kali run ulang
   statusEl.textContent = "Compiling...";
   runBtn.disabled = true;
   try {
@@ -118,3 +149,8 @@ runBtn.addEventListener("click", async () => {
 });
 
 stopBtn.addEventListener("click", stop);
+
+// BARU
+clearBtn.addEventListener("click", () => {
+  serialEl.textContent = "";
+});
