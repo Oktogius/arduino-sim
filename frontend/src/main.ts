@@ -12,6 +12,12 @@ import {
   usart0Config,
 } from "avr8js";
 import { loadHex } from "./intelhex";
+import {
+  createEditor,
+  addRunShortcut,
+  showCompileErrors,
+  clearCompileErrors,
+} from "./editor";
 
 const DEFAULT_CODE = `void setup() {
   Serial.begin(9600);
@@ -32,7 +38,7 @@ void loop() {
 
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   <h1>Arduino Sim</h1>
-  <textarea id="code" spellcheck="false"></textarea>
+  <div id="editor"></div>
   <div class="controls">
     <button id="run">Compile &amp; Run</button>
     <button id="stop" disabled>Stop</button>
@@ -56,7 +62,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   </form>
 `;
 
-const codeEl = document.querySelector<HTMLTextAreaElement>("#code")!;
+const editorEl = document.querySelector<HTMLDivElement>("#editor")!;
 const runBtn = document.querySelector<HTMLButtonElement>("#run")!;
 const stopBtn = document.querySelector<HTMLButtonElement>("#stop")!;
 const statusEl = document.querySelector<HTMLSpanElement>("#status")!;
@@ -68,7 +74,11 @@ const button2El = document.querySelector<HTMLButtonElement>("#btn2")!;
 const serialForm = document.querySelector<HTMLFormElement>("#serial-form")!;
 const serialInEl = document.querySelector<HTMLInputElement>("#serial-in")!;
 
-codeEl.value = DEFAULT_CODE;
+const editor = createEditor(editorEl, DEFAULT_CODE);
+// Ctrl+Enter = Compile & Run (kecuali sedang compile)
+addRunShortcut(editor, () => {
+  if (!runBtn.disabled) runBtn.click();
+});
 
 let running = false;
 const MAX_SERIAL_LENGTH = 10000;
@@ -196,14 +206,17 @@ runBtn.addEventListener("click", async () => {
   serialEl.textContent = "";
   statusEl.textContent = "Compiling...";
   runBtn.disabled = true;
+  clearCompileErrors(editor);
   try {
-    const hex = await compile(codeEl.value);
+    const hex = await compile(editor.getValue());
     run(hex);
     statusEl.textContent = "Berjalan";
     stopBtn.disabled = false;
   } catch (err) {
     statusEl.textContent = "Gagal compile";
-    outputEl.textContent = String(err instanceof Error ? err.message : err);
+    const message = String(err instanceof Error ? err.message : err);
+    outputEl.textContent = message;
+    showCompileErrors(editor, message); // garis merah di baris yang error
   } finally {
     runBtn.disabled = false;
   }

@@ -48,7 +48,9 @@ def compile_sketch(req: CompileRequest):
             return {"success": False, "error": "Compile terlalu lama (timeout)."}
 
         if result.returncode != 0:
-            return {"success": False, "error": result.stderr}
+            # Sembunyikan path folder sementara di server
+            clean = result.stderr.replace(str(sketch_dir / "sketch.ino"), "sketch.ino")
+            return {"success": False, "error": clean}
 
         hex_content = (build_dir / "sketch.ino.hex").read_text()
         return {"success": True, "hex": hex_content}
