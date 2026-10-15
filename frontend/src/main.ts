@@ -50,6 +50,10 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     <button id="clear">Clear</button>
   </div>
   <pre id="serial"></pre>
+  <form id="serial-form" class="serial-input">
+    <input id="serial-in" type="text" autocomplete="off" placeholder="Ketik pesan lalu Enter..." />
+    <button type="submit">Kirim</button>
+  </form>
 `;
 
 const codeEl = document.querySelector<HTMLTextAreaElement>("#code")!;
@@ -61,6 +65,8 @@ const outputEl = document.querySelector<HTMLPreElement>("#output")!;
 const serialEl = document.querySelector<HTMLPreElement>("#serial")!;
 const clearBtn = document.querySelector<HTMLButtonElement>("#clear")!;
 const button2El = document.querySelector<HTMLButtonElement>("#btn2")!;
+const serialForm = document.querySelector<HTMLFormElement>("#serial-form")!;
+const serialInEl = document.querySelector<HTMLInputElement>("#serial-in")!;
 
 codeEl.value = DEFAULT_CODE;
 
@@ -80,6 +86,29 @@ const BUTTON_PIN = 2;
 function setButtonPressed(pressed: boolean) {
   button2El.classList.toggle("pressed", pressed);
   portD?.setPin(BUTTON_PIN, !pressed);
+}
+
+// --- Serial input (browser -> Arduino) ---
+// USART asli hanya bisa menerima satu byte dalam satu waktu, dan tiap byte
+// butuh waktu sesuai baud rate. Jadi teks dari browser diantrikan dulu,
+// lalu dikirim byte demi byte.
+let usartRx: AVRUSART | null = null;
+let rxQueue: number[] = [];
+
+function pumpRx() {
+  // writeByte mengembalikan false kalau penerima masih sibuk
+  // atau Serial.begin() belum dipanggil di sketch
+  if (usartRx && rxQueue.length > 0 && usartRx.writeByte(rxQueue[0])) {
+    rxQueue.shift();
+  }
+}
+
+function sendSerial(text: string) {
+  if (!usartRx) return;
+  // TextEncoder -> byte UTF-8, aman untuk karakter non-ASCII
+  const bytes = new TextEncoder().encode(text + "\n");
+  rxQueue.push(...bytes);
+  pumpRx();
 }
 
 async function compile(code: string): Promise<string> {
@@ -119,6 +148,10 @@ function run(hex: string) {
   usart.onByteTransmit = (value: number) => {
     serialBuffer += String.fromCharCode(value);
   };
+  // Begitu satu byte selesai diterima chip, langsung kirim byte berikutnya
+  usart.onRxComplete = pumpRx;
+  usartRx = usart;
+  rxQueue = [];
 
   // 16 MHz dibagi ~60 frame per detik
   const CYCLES_PER_FRAME = 16_000_000 / 60;
@@ -131,6 +164,9 @@ function run(hex: string) {
       avrInstruction(cpu); // jalankan satu instruksi
       cpu.tick(); // perbarui timer & interrupt
     }
+    // Cadangan: coba kirim antrean serial sekali per frame, misalnya kalau
+    // Serial.begin() baru dipanggil setelah teks diketik
+    pumpRx();
     // Batching: tampilkan teks serial sekali per frame
     if (serialBuffer) {
       serialEl.textContent = (serialEl.textContent + serialBuffer).slice(
@@ -147,6 +183,8 @@ function run(hex: string) {
 function stop() {
   running = false;
   portD = null; // klik tombol saat berhenti tidak lagi menyentuh emulator
+  usartRx = null;
+  rxQueue = [];
   ledEl.classList.remove("on");
   stopBtn.disabled = true;
   statusEl.textContent = "Berhenti";
@@ -187,3 +225,10 @@ button2El.addEventListener("pointerdown", (e) => {
 });
 button2El.addEventListener("pointerup", () => setButtonPressed(false));
 button2El.addEventListener("pointercancel", () => setButtonPressed(false));
+
+// Form serial: Enter atau klik Kirim
+serialForm.addEventListener("submit", (e) => {
+  e.preventDefault(); // cegah halaman reload
+  sendSerial(serialInEl.value);
+  serialInEl.value = "";
+});
