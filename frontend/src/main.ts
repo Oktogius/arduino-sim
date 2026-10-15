@@ -1,60 +1,120 @@
-import './style.css'
-import heroImg from './assets/hero.png'
-import typescriptLogo from './assets/typescript.svg'
-import viteLogo from './assets/vite.svg'
-import { setupCounter } from './counter.ts'
+import "./style.css";
+import {
+  CPU,
+  avrInstruction,
+  AVRTimer,
+  timer0Config,
+  AVRIOPort,
+  portBConfig,
+  PinState,
+} from "avr8js";
+import { loadHex } from "./intelhex";
 
-document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-<section id="center">
-  <div class="hero">
-    <img src="${heroImg}" class="base" width="170" height="179">
-    <img src="${typescriptLogo}" class="framework" alt="TypeScript logo"/>
-    <img src="${viteLogo}" class="vite" alt="Vite logo" />
+const DEFAULT_CODE = `void setup() {
+  pinMode(13, OUTPUT);
+}
+
+void loop() {
+  digitalWrite(13, HIGH);
+  delay(500);
+  digitalWrite(13, LOW);
+  delay(500);
+}
+`;
+
+document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
+  <h1>Arduino Sim</h1>
+  <textarea id="code" spellcheck="false"></textarea>
+  <div class="controls">
+    <button id="run">Compile &amp; Run</button>
+    <button id="stop" disabled>Stop</button>
+    <span id="status">Siap</span>
   </div>
-  <div>
-    <h1>Get started</h1>
-    <p>Edit <code>src/main.ts</code> and save to test <code>HMR</code></p>
+  <div class="board">
+    <div id="led" class="led"></div>
+    <span>LED Pin 13</span>
   </div>
-  <button id="counter" type="button" class="counter"></button>
-</section>
+  <pre id="output"></pre>
+`;
 
-<div class="ticks"></div>
+const codeEl = document.querySelector<HTMLTextAreaElement>("#code")!;
+const runBtn = document.querySelector<HTMLButtonElement>("#run")!;
+const stopBtn = document.querySelector<HTMLButtonElement>("#stop")!;
+const statusEl = document.querySelector<HTMLSpanElement>("#status")!;
+const ledEl = document.querySelector<HTMLDivElement>("#led")!;
+const outputEl = document.querySelector<HTMLPreElement>("#output")!;
 
-<section id="next-steps">
-  <div id="docs">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#documentation-icon"></use></svg>
-    <h2>Documentation</h2>
-    <p>Your questions, answered</p>
-    <ul>
-      <li>
-        <a href="https://vite.dev/" target="_blank">
-          <img class="logo" src="${viteLogo}" alt="" />
-          Explore Vite
-        </a>
-      </li>
-      <li>
-        <a href="https://www.typescriptlang.org" target="_blank">
-          <img class="button-icon" src="${typescriptLogo}" alt="">
-          Learn more
-        </a>
-      </li>
-    </ul>
-  </div>
-  <div id="social">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#social-icon"></use></svg>
-    <h2>Connect with us</h2>
-    <p>Join the Vite community</p>
-    <ul>
-      <li><a href="https://github.com/vitejs/vite" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#github-icon"></use></svg>GitHub</a></li>
-      <li><a href="https://chat.vite.dev/" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#discord-icon"></use></svg>Discord</a></li>
-      <li><a href="https://x.com/vite_js" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#x-icon"></use></svg>X.com</a></li>
-      <li><a href="https://bsky.app/profile/vite.dev" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#bluesky-icon"></use></svg>Bluesky</a></li>
-    </ul>
-  </div>
-</section>
+codeEl.value = DEFAULT_CODE;
 
-<div class="ticks"></div>
-<section id="spacer"></section>
-`
+let running = false;
 
-setupCounter(document.querySelector<HTMLButtonElement>('#counter')!)
+// Kirim kode ke server Python, terima file .hex
+async function compile(code: string): Promise<string> {
+  const res = await fetch("http://localhost:8000/compile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  const data = await res.json();
+  if (!data.success) throw new Error(data.error);
+  return data.hex;
+}
+
+// Jalankan file .hex di emulator ATmega328P
+function run(hex: string) {
+  // Flash ATmega328P = 32 KB, disimpan sebagai word 16-bit
+  const program = new Uint16Array(0x8000 / 2);
+  loadHex(hex, new Uint8Array(program.buffer));
+
+  const cpu = new CPU(program);
+  new AVRTimer(cpu, timer0Config); // dibutuhkan oleh delay() dan millis()
+  const portB = new AVRIOPort(cpu, portBConfig);
+
+  // Pin 13 di Arduino Uno = bit ke-5 dari PORTB (PB5)
+  portB.addListener(() => {
+    const on = portB.pinState(5) === PinState.High;
+    ledEl.classList.toggle("on", on);
+  });
+
+  // Arduino Uno berjalan 16 MHz; browser menggambar ~60 kali per detik
+  const CYCLES_PER_FRAME = 16_000_000 / 60;
+
+  running = true;
+  function frame() {
+    if (!running) return;
+    const target = cpu.cycles + CYCLES_PER_FRAME;
+    while (cpu.cycles < target) {
+      avrInstruction(cpu); // jalankan satu instruksi
+      cpu.tick(); // perbarui timer & interrupt
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+function stop() {
+  running = false;
+  ledEl.classList.remove("on");
+  stopBtn.disabled = true;
+  statusEl.textContent = "Berhenti";
+}
+
+runBtn.addEventListener("click", async () => {
+  stop();
+  outputEl.textContent = "";
+  statusEl.textContent = "Compiling...";
+  runBtn.disabled = true;
+  try {
+    const hex = await compile(codeEl.value);
+    run(hex);
+    statusEl.textContent = "Berjalan";
+    stopBtn.disabled = false;
+  } catch (err) {
+    statusEl.textContent = "Gagal compile";
+    outputEl.textContent = String(err instanceof Error ? err.message : err);
+  } finally {
+    runBtn.disabled = false;
+  }
+});
+
+stopBtn.addEventListener("click", stop);
