@@ -11,7 +11,7 @@ Proyek ini dibuat sebagai sarana belajar, dikembangkan bertahap dari prototipe s
 
 - [x] Setup proyek (frontend Vite + TypeScript)
 - [ ] Server compile kode Arduino (Python + arduino-cli)
-- [ ] Simulasi LED berkedip di browser
+- [x] Simulasi LED berkedip di browser
 - [ ] Editor kode dan serial monitor
 - [ ] Komponen tambahan (tombol, potensiometer, dll.)
 
