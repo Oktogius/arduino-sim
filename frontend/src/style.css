@@ -93,3 +93,20 @@ button:disabled {
   border-radius: 6px;
   white-space: pre-wrap;
 }
+
+.push-button {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 3px solid #333;
+  background: #c62828;
+  box-shadow: 0 4px 0 #333;
+  cursor: pointer;
+  touch-action: none; /* cegah scroll/zoom saat ditekan di HP */
+}
+.push-button.pressed {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 #333;
+}
