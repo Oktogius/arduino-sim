@@ -26,6 +26,12 @@ import {
   showCompileErrors,
   clearCompileErrors,
 } from "./editor";
+import {
+  loadSavedCode,
+  saveCode,
+  makeShareUrl,
+  readCodeFromUrl,
+} from "./share";
 
 const DEFAULT_CODE = `// Putar potensiometer untuk mengatur kecepatan kedip LED.
 // Tahan tombol untuk membuat LED menyala terus.
@@ -62,6 +68,8 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   <div class="controls">
     <button id="run">Compile &amp; Run</button>
     <button id="stop" disabled>Stop</button>
+    <button id="share" class="secondary">Bagikan</button>
+    <button id="example" class="secondary">Contoh</button>
     <span id="status">Siap</span>
   </div>
   <div class="board">
@@ -96,6 +104,8 @@ const editorEl = document.querySelector<HTMLDivElement>("#editor")!;
 const runBtn = document.querySelector<HTMLButtonElement>("#run")!;
 const stopBtn = document.querySelector<HTMLButtonElement>("#stop")!;
 const statusEl = document.querySelector<HTMLSpanElement>("#status")!;
+const shareBtn = document.querySelector<HTMLButtonElement>("#share")!;
+const exampleBtn = document.querySelector<HTMLButtonElement>("#example")!;
 const outputEl = document.querySelector<HTMLPreElement>("#output")!;
 const serialEl = document.querySelector<HTMLPreElement>("#serial")!;
 const clearBtn = document.querySelector<HTMLButtonElement>("#clear")!;
@@ -112,7 +122,24 @@ const potEl = document.querySelector<PotentiometerElement>(
 const potSlider = document.querySelector<HTMLInputElement>("#pot-slider")!;
 const potReadout = document.querySelector<HTMLSpanElement>("#pot-readout")!;
 
-const editor = createEditor(editorEl, DEFAULT_CODE);
+// Urutan kode awal: simpanan lokal, kalau tidak ada pakai contoh bawaan.
+// Kode dari link berbagi dibaca sesudahnya (prosesnya async).
+const editor = createEditor(editorEl, loadSavedCode() ?? DEFAULT_CODE);
+
+readCodeFromUrl().then((sharedCode) => {
+  if (sharedCode !== null) {
+    editor.setValue(sharedCode);
+    statusEl.textContent = "Kode dari link dimuat";
+  }
+});
+
+// Simpan otomatis setengah detik setelah berhenti mengetik (debounce),
+// supaya tidak menulis ke localStorage di setiap ketukan tombol.
+let saveTimer: number | undefined;
+editor.onDidChangeModelContent(() => {
+  clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(() => saveCode(editor.getValue()), 500);
+});
 // Ctrl+Enter = Compile & Run (kecuali sedang compile)
 addRunShortcut(editor, () => {
   if (!runBtn.disabled) runBtn.click();
@@ -279,6 +306,29 @@ runBtn.addEventListener("click", async () => {
 });
 
 stopBtn.addEventListener("click", stop);
+
+// Bagikan: buat link berisi kode, lalu salin ke clipboard
+shareBtn.addEventListener("click", async () => {
+  const url = await makeShareUrl(editor.getValue());
+  try {
+    await navigator.clipboard.writeText(url);
+    statusEl.textContent = "Link disalin ke clipboard!";
+  } catch {
+    // Clipboard bisa ditolak browser; tampilkan link agar bisa disalin manual
+    outputEl.textContent = `Salin link ini:\n${url}`;
+  }
+});
+
+// Contoh: kembalikan kode bawaan. Memakai executeEdits (bukan setValue)
+// supaya bisa dibatalkan dengan Ctrl+Z.
+exampleBtn.addEventListener("click", () => {
+  const model = editor.getModel();
+  if (!model) return;
+  editor.executeEdits("contoh", [
+    { range: model.getFullModelRange(), text: DEFAULT_CODE },
+  ]);
+  editor.focus();
+});
 
 clearBtn.addEventListener("click", () => {
   serialEl.textContent = "";

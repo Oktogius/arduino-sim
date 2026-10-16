@@ -100,3 +100,10 @@ button:disabled {
   gap: 8px;
   font-size: 13px;
 }
+
+button.secondary {
+  background: #3a3a3a;
+}
+button.secondary:hover {
+  background: #4a4a4a;
+}
