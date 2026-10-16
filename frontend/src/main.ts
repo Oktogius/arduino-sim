@@ -202,12 +202,21 @@ function sendSerial(text: string) {
   pumpRx();
 }
 
+// Alamat server compile. Di komputer sendiri otomatis localhost:8000.
+// Saat deploy, diisi lewat environment variable VITE_API_URL.
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+
 async function compile(code: string): Promise<string> {
-  const res = await fetch("http://localhost:8000/compile", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/compile`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+  } catch {
+    throw new Error("Server compile tidak bisa dihubungi. Coba lagi sebentar.");
+  }
   const data = await res.json();
   if (!data.success) throw new Error(data.error);
   return data.hex;
