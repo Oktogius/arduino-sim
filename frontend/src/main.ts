@@ -1,4 +1,10 @@
 import "./style.css";
+import "@wokwi/elements"; // mendaftarkan semua tag <wokwi-...>
+import type {
+  LEDElement,
+  PushbuttonElement,
+  PotentiometerElement,
+} from "@wokwi/elements";
 import {
   CPU,
   avrInstruction,
@@ -10,6 +16,8 @@ import {
   PinState,
   AVRUSART,
   usart0Config,
+  AVRADC,
+  adcConfig,
 } from "avr8js";
 import { loadHex } from "./intelhex";
 import {
@@ -19,19 +27,31 @@ import {
   clearCompileErrors,
 } from "./editor";
 
-const DEFAULT_CODE = `void setup() {
+const DEFAULT_CODE = `// Putar potensiometer untuk mengatur kecepatan kedip LED.
+// Tahan tombol untuk membuat LED menyala terus.
+void setup() {
   Serial.begin(9600);
   pinMode(2, INPUT_PULLUP);
   pinMode(13, OUTPUT);
 }
 
-int last = -1;
 void loop() {
-  int s = digitalRead(2);
-  digitalWrite(13, s == LOW);   // LED menyala saat tombol ditekan
-  if (s != last) {
-    Serial.println(s == LOW ? "Ditekan" : "Dilepas");
-    last = s;
+  int pot = analogRead(A0);              // 0..1023
+  bool ditekan = digitalRead(2) == LOW;
+
+  Serial.print("A0 = ");
+  Serial.print(pot);
+  Serial.println(ditekan ? "  [tombol ditekan]" : "");
+
+  if (ditekan) {
+    digitalWrite(13, HIGH);
+    delay(100);
+  } else {
+    int jeda = pot / 4 + 50;             // 50..305 ms
+    digitalWrite(13, HIGH);
+    delay(jeda);
+    digitalWrite(13, LOW);
+    delay(jeda);
   }
 }
 `;
@@ -45,10 +65,20 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     <span id="status">Siap</span>
   </div>
   <div class="board">
-    <div id="led" class="led"></div>
-    <span>LED Pin 13</span>
-    <button id="btn2" class="push-button" aria-label="Tombol pin 2"></button>
-    <span>Tombol Pin 2</span>
+    <div class="component">
+      <wokwi-led color="red"></wokwi-led>
+      <span>LED Pin 13</span>
+    </div>
+    <div class="component">
+      <wokwi-pushbutton color="green"></wokwi-pushbutton>
+      <span>Tombol Pin 2</span>
+    </div>
+    <div class="component">
+      <wokwi-potentiometer></wokwi-potentiometer>
+      <input id="pot-slider" type="range" min="0" max="1023" value="0" aria-label="Potensiometer A0" />
+      <span>Potensiometer A0</span>
+      <span id="pot-readout" class="readout"></span>
+    </div>
   </div>
   <pre id="output"></pre>
   <div class="serial-header">
@@ -66,13 +96,21 @@ const editorEl = document.querySelector<HTMLDivElement>("#editor")!;
 const runBtn = document.querySelector<HTMLButtonElement>("#run")!;
 const stopBtn = document.querySelector<HTMLButtonElement>("#stop")!;
 const statusEl = document.querySelector<HTMLSpanElement>("#status")!;
-const ledEl = document.querySelector<HTMLDivElement>("#led")!;
 const outputEl = document.querySelector<HTMLPreElement>("#output")!;
 const serialEl = document.querySelector<HTMLPreElement>("#serial")!;
 const clearBtn = document.querySelector<HTMLButtonElement>("#clear")!;
-const button2El = document.querySelector<HTMLButtonElement>("#btn2")!;
 const serialForm = document.querySelector<HTMLFormElement>("#serial-form")!;
 const serialInEl = document.querySelector<HTMLInputElement>("#serial-in")!;
+
+// Komponen wokwi-elements. Tipe ditulis eksplisit di <...> supaya
+// TypeScript tahu properti khususnya (value, pressed, dll.).
+const ledEl = document.querySelector<LEDElement>("wokwi-led")!;
+const buttonEl = document.querySelector<PushbuttonElement>("wokwi-pushbutton")!;
+const potEl = document.querySelector<PotentiometerElement>(
+  "wokwi-potentiometer",
+)!;
+const potSlider = document.querySelector<HTMLInputElement>("#pot-slider")!;
+const potReadout = document.querySelector<HTMLSpanElement>("#pot-readout")!;
 
 const editor = createEditor(editorEl, DEFAULT_CODE);
 // Ctrl+Enter = Compile & Run (kecuali sedang compile)
@@ -83,28 +121,44 @@ addRunShortcut(editor, () => {
 let running = false;
 const MAX_SERIAL_LENGTH = 10000;
 
-// Port D milik emulator yang sedang berjalan (null kalau tidak ada).
-// Disimpan di level modul supaya listener tombol (dipasang sekali saja)
-// selalu menjangkau emulator yang aktif.
+// --- Referensi ke periferal emulator yang sedang berjalan ---
+// Disimpan di level modul supaya listener komponen (dipasang sekali saja)
+// selalu menjangkau emulator yang aktif. null = emulator tidak berjalan.
 let portD: AVRIOPort | null = null;
+let adc: AVRADC | null = null;
+let usartRx: AVRUSART | null = null;
+let rxQueue: number[] = [];
 
 // Pin 2 di Arduino Uno = PD2 (bit ke-2 dari PORTD)
 const BUTTON_PIN = 2;
+// A0 = kanal ADC 0 (PC0)
+const POT_CHANNEL = 0;
 
+// --- Tombol ---
 // Rangkaian virtual: tombol ke GND, dipakai dengan INPUT_PULLUP.
 // Dilepas = HIGH, ditekan = LOW (active low).
-function setButtonPressed(pressed: boolean) {
-  button2El.classList.toggle("pressed", pressed);
-  portD?.setPin(BUTTON_PIN, !pressed);
+function updateButtonPin() {
+  portD?.setPin(BUTTON_PIN, !buttonEl.pressed);
 }
+
+// --- Potensiometer ---
+// Kaki potensiometer ke 5V dan GND, kaki tengah ke A0.
+// Slider 0..1023 diubah menjadi tegangan 0..5 V.
+// ADC chip lalu mengubah tegangan itu kembali menjadi angka 0..1023.
+// Slider jadi pengendali; knob wokwi hanya tampilan yang ikut berputar.
+function updatePotVoltage() {
+  const raw = Number(potSlider.value);
+  const volts = (raw / 1023) * 5;
+  potEl.value = raw; // putar knob sesuai slider
+  potReadout.textContent = `${raw} · ${volts.toFixed(2)} V`;
+  if (adc) adc.channelValues[POT_CHANNEL] = volts;
+}
+updatePotVoltage(); // tampilkan nilai awal
 
 // --- Serial input (browser -> Arduino) ---
 // USART asli hanya bisa menerima satu byte dalam satu waktu, dan tiap byte
 // butuh waktu sesuai baud rate. Jadi teks dari browser diantrikan dulu,
 // lalu dikirim byte demi byte.
-let usartRx: AVRUSART | null = null;
-let rxQueue: number[] = [];
-
 function pumpRx() {
   // writeByte mengembalikan false kalau penerima masih sibuk
   // atau Serial.begin() belum dipanggil di sketch
@@ -143,14 +197,17 @@ function run(hex: string) {
   const portB = new AVRIOPort(cpu, portBConfig);
   // Pin 13 di Arduino Uno = bit ke-5 dari PORTB (PB5)
   portB.addListener(() => {
-    const on = portB.pinState(5) === PinState.High;
-    ledEl.classList.toggle("on", on);
+    ledEl.value = portB.pinState(5) === PinState.High;
   });
 
-  // Port D untuk input tombol. Mulai dalam keadaan "dilepas" (HIGH),
+  // Port D untuk tombol. Set nilai awal sesuai kondisi tombol sekarang,
   // supaya sketch tidak mengira tombol ditekan saat program baru mulai.
   portD = new AVRIOPort(cpu, portDConfig);
-  portD.setPin(BUTTON_PIN, !button2El.classList.contains("pressed"));
+  updateButtonPin();
+
+  // ADC untuk analogRead(). Tegangan referensi default 5 V (AVCC).
+  adc = new AVRADC(cpu, adcConfig);
+  updatePotVoltage();
 
   // Tiruan USART, frekuensi CPU 16 MHz
   const usart = new AVRUSART(cpu, usart0Config, 16_000_000);
@@ -174,8 +231,7 @@ function run(hex: string) {
       avrInstruction(cpu); // jalankan satu instruksi
       cpu.tick(); // perbarui timer & interrupt
     }
-    // Cadangan: coba kirim antrean serial sekali per frame, misalnya kalau
-    // Serial.begin() baru dipanggil setelah teks diketik
+    // Cadangan: coba kirim antrean serial sekali per frame
     pumpRx();
     // Batching: tampilkan teks serial sekali per frame
     if (serialBuffer) {
@@ -192,10 +248,11 @@ function run(hex: string) {
 
 function stop() {
   running = false;
-  portD = null; // klik tombol saat berhenti tidak lagi menyentuh emulator
+  portD = null;
+  adc = null;
   usartRx = null;
   rxQueue = [];
-  ledEl.classList.remove("on");
+  ledEl.value = false;
   stopBtn.disabled = true;
   statusEl.textContent = "Berhenti";
 }
@@ -213,7 +270,6 @@ runBtn.addEventListener("click", async () => {
     statusEl.textContent = "Berjalan";
     stopBtn.disabled = false;
   } catch (err) {
-    statusEl.textContent = "Gagal compile";
     const message = String(err instanceof Error ? err.message : err);
     outputEl.textContent = message;
     showCompileErrors(editor, message); // garis merah di baris yang error
@@ -228,16 +284,14 @@ clearBtn.addEventListener("click", () => {
   serialEl.textContent = "";
 });
 
-// Listener tombol dipasang SEKALI di sini, bukan di dalam run().
-// Pointer Events menangani mouse dan layar sentuh sekaligus.
-// setPointerCapture membuat pointerup tetap sampai ke tombol walaupun
-// pointer sudah digeser keluar, jadi tombol tidak "nyangkut".
-button2El.addEventListener("pointerdown", (e) => {
-  button2El.setPointerCapture(e.pointerId);
-  setButtonPressed(true);
-});
-button2El.addEventListener("pointerup", () => setButtonPressed(false));
-button2El.addEventListener("pointercancel", () => setButtonPressed(false));
+// --- Listener komponen: dipasang SEKALI di sini, bukan di dalam run() ---
+// wokwi-pushbutton sudah menangani mouse, sentuhan, keyboard (Spasi),
+// dan pointer yang keluar dari tombol. Kita cukup mendengarkan event-nya.
+buttonEl.addEventListener("button-press", updateButtonPin);
+buttonEl.addEventListener("button-release", updateButtonPin);
+
+// Event 'input' muncul setiap kali slider digeser
+potSlider.addEventListener("input", updatePotVoltage);
 
 // Form serial: Enter atau klik Kirim
 serialForm.addEventListener("submit", (e) => {
