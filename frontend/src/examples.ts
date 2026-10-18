@@ -14,6 +14,7 @@ export interface Example {
   howTo: string; // cara mencoba, tampil di bawah toolbar setelah dimuat
   libraries: string[]; // library Arduino yang dibutuhkan, misalnya ["Servo"]
   bounce?: boolean; // true = mode Bouncing dinyalakan saat contoh dimuat
+  plotter?: boolean; // true = tab Serial Plotter dibuka saat contoh dimuat
   circuit: string; // rangkaian dalam format teks circuit.ts
   code: string;
 }
@@ -148,6 +149,35 @@ void loop() {
   nyalakan(HIJAU, "HIJAU: jalan", 4000);
   nyalakan(KUNING, "KUNING: hati-hati", 1500);
   nyalakan(MERAH, "MERAH: berhenti", 4000);
+}
+`,
+  },
+  {
+    id: "plotter",
+    title: "Serial Plotter",
+    group: DASAR,
+    summary: "Nilai potensiometer dan gelombang sinus digambar sebagai grafik.",
+    howTo:
+      "Tab Serial Plotter sudah dibuka. Klik Compile & Run, lalu geser slider potensiometer: " +
+      "garis pot ikut naik-turun, garis sinus bergelombang terus.",
+    libraries: [],
+    plotter: true,
+    circuit: "pot-A0",
+    code: `// Serial Plotter: dua garis di grafik.
+// Format: nama:nilai, dipisah koma, satu baris (println) = satu titik.
+void setup() {
+  Serial.begin(9600);
+}
+
+void loop() {
+  float t = millis() / 1000.0;              // waktu dalam detik
+  int gelombang = 512 + 400 * sin(t * 3);   // gelombang sinus 112..912
+
+  Serial.print("pot:");
+  Serial.print(analogRead(A0));
+  Serial.print(",sinus:");
+  Serial.println(gelombang);
+  delay(20);
 }
 `,
   },

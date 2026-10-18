@@ -54,6 +54,7 @@ import { EXAMPLES, DEFAULT_EXAMPLE, type Example } from "./examples";
 import { createGallery } from "./gallery";
 import { explainErrors } from "./explain";
 import { createExplainPanel } from "./explainPanel";
+import { SerialPlotter } from "./plotter";
 
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   <h1>Arduino Sim</h1>
@@ -80,10 +81,21 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   <div id="explain"></div>
   <pre id="output"></pre>
   <div class="serial-header">
-    <span>Serial Monitor</span>
+    <div class="serial-tabs" role="tablist">
+      <button id="tab-monitor" class="tab" role="tab">Serial Monitor</button>
+      <button id="tab-plotter" class="tab" role="tab">Serial Plotter</button>
+    </div>
     <button id="clear">Clear</button>
   </div>
-  <pre id="serial"></pre>
+  <pre id="serial" role="tabpanel"></pre>
+  <div id="plotter" class="plotter" role="tabpanel" hidden>
+    <div id="plot-legend" class="plot-legend"></div>
+    <p id="plot-empty" class="plot-empty">
+      Belum ada angka. Kirim dengan Serial.println(nilai); atau beberapa
+      sekaligus: Serial.print("suhu:"); Serial.print(t); Serial.print(",lembab:"); Serial.println(h);
+    </p>
+    <canvas id="plot-canvas"></canvas>
+  </div>
   <form id="serial-form" class="serial-input">
     <input id="serial-in" type="text" autocomplete="off" placeholder="Ketik pesan lalu Enter..." />
     <button type="submit">Kirim</button>
@@ -102,6 +114,9 @@ const outputEl = document.querySelector<HTMLPreElement>("#output")!;
 const explainEl = document.querySelector<HTMLDivElement>("#explain")!;
 const serialEl = document.querySelector<HTMLPreElement>("#serial")!;
 const clearBtn = document.querySelector<HTMLButtonElement>("#clear")!;
+const tabMonitor = document.querySelector<HTMLButtonElement>("#tab-monitor")!;
+const tabPlotter = document.querySelector<HTMLButtonElement>("#tab-plotter")!;
+const plotterEl = document.querySelector<HTMLDivElement>("#plotter")!;
 const serialForm = document.querySelector<HTMLFormElement>("#serial-form")!;
 const serialInEl = document.querySelector<HTMLInputElement>("#serial-in")!;
 
@@ -133,6 +148,28 @@ addRunShortcut(editor, () => {
 });
 
 let running = false;
+
+// Serial Plotter: membaca angka dari teks serial yang sama dengan Serial Monitor.
+// Data tetap dikumpulkan walaupun tab Plotter sedang tidak dibuka.
+const plotter = new SerialPlotter(
+  document.querySelector<HTMLCanvasElement>("#plot-canvas")!,
+  document.querySelector<HTMLDivElement>("#plot-legend")!,
+  document.querySelector<HTMLParagraphElement>("#plot-empty")!,
+);
+
+// Pindah tab Serial Monitor / Serial Plotter
+function showSerialView(view: "monitor" | "plotter") {
+  const plot = view === "plotter";
+  serialEl.hidden = plot;
+  plotterEl.hidden = !plot;
+  tabMonitor.classList.toggle("active", !plot);
+  tabPlotter.classList.toggle("active", plot);
+  tabMonitor.setAttribute("aria-selected", String(!plot));
+  tabPlotter.setAttribute("aria-selected", String(plot));
+  plotter.setVisible(plot);
+  if (!plot) serialEl.scrollTop = serialEl.scrollHeight;
+}
+showSerialView("monitor");
 const MAX_SERIAL_LENGTH = 10000;
 
 // --- Referensi ke periferal emulator yang sedang berjalan ---
@@ -384,12 +421,14 @@ function run(hex: string) {
 
     // Batching: tampilkan teks serial sekali per frame
     if (serialBuffer) {
+      plotter.feed(serialBuffer);
       serialEl.textContent = (serialEl.textContent + serialBuffer).slice(
         -MAX_SERIAL_LENGTH,
       );
       serialBuffer = "";
       serialEl.scrollTop = serialEl.scrollHeight;
     }
+    plotter.render(); // hanya menggambar kalau ada angka baru dan tab terlihat
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
@@ -414,6 +453,7 @@ runBtn.addEventListener("click", async () => {
   outputEl.textContent = "";
   explainPanel.clear();
   serialEl.textContent = "";
+  plotter.clear(true); // program baru: serial mulai dari awal baris
   statusEl.textContent = "Compiling...";
   runBtn.disabled = true;
   // Selama compile, contoh tidak bisa dimuat: kalau rangkaian diganti di
@@ -479,6 +519,7 @@ function loadExample(example: Example) {
   board.setParts(parts);
   saveCircuit(parts);
   if (example.bounce) bounceToggle.checked = true;
+  if (example.plotter) showSerialView("plotter");
 
   // executeEdits (bukan setValue) supaya bisa dibatalkan dengan Ctrl+Z.
   // pushUndoStop di depan dan belakang: penggantian kode menjadi satu langkah
@@ -510,6 +551,7 @@ createGallery(exampleBtn, EXAMPLES, loadExample);
 
 clearBtn.addEventListener("click", () => {
   serialEl.textContent = "";
+  plotter.clear();
 });
 
 // --- Listener papan: dipasang SEKALI di sini, bukan di dalam run() ---
@@ -536,6 +578,9 @@ bounceToggle.addEventListener("change", () => {
     if (part.type === "button") board.setReadout(part.id, "");
   }
 });
+
+tabMonitor.addEventListener("click", () => showSerialView("monitor"));
+tabPlotter.addEventListener("click", () => showSerialView("plotter"));
 
 // Form serial: Enter atau klik Kirim
 serialForm.addEventListener("submit", (e) => {
