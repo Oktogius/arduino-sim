@@ -59,20 +59,33 @@ function fromBase64Url(text: string): Uint8Array<ArrayBuffer> {
 }
 
 // --- Link berbagi ---
-export async function makeShareUrl(code: string): Promise<string> {
-  return `${location.origin}${location.pathname}#code=${await compress(code)}`;
+// Bentuk link: ...#code=<kode terkompres>&circuit=<rangkaian>
+// Rangkaian sudah berupa teks pendek yang aman di URL (lihat circuit.ts),
+// jadi tidak perlu dikompres.
+export async function makeShareUrl(
+  code: string,
+  circuit: string,
+): Promise<string> {
+  const params = new URLSearchParams({ code: await compress(code), circuit });
+  return `${location.origin}${location.pathname}#${params}`;
 }
 
-// Membaca kode dari link (kalau halaman dibuka dari link berbagi).
-// Setelah dibaca, "#code=..." dihapus dari address bar supaya refresh
+export interface SharedProject {
+  code: string;
+  circuit: string | null; // null untuk link lama (sebelum v1.2) yang hanya berisi kode
+}
+
+// Membaca kode dan rangkaian dari link (kalau halaman dibuka dari link berbagi).
+// Setelah dibaca, bagian "#..." dihapus dari address bar supaya refresh
 // berikutnya memakai simpanan lokal, bukan menimpa hasil edit pengguna.
-export async function readCodeFromUrl(): Promise<string | null> {
-  const match = location.hash.match(/^#code=(.+)$/);
-  if (!match) return null;
+export async function readSharedFromUrl(): Promise<SharedProject | null> {
+  const params = new URLSearchParams(location.hash.slice(1));
+  const encoded = params.get("code");
+  if (!encoded) return null;
   try {
-    const code = await decompress(match[1]);
+    const code = await decompress(encoded);
     history.replaceState(null, "", location.pathname + location.search);
-    return code;
+    return { code, circuit: params.get("circuit") };
   } catch {
     return null; // link rusak atau terpotong
   }
