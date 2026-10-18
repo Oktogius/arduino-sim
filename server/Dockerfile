@@ -21,6 +21,7 @@ ENV PATH="/home/app/.local/bin:${PATH}"
 
 # Pasang core Arduino AVR (sama seperti "arduino-cli core install" di Windows)
 RUN arduino-cli core update-index && arduino-cli core install arduino:avr
+RUN arduino-cli lib install Servo
 
 # Compile sketch kosong sekali saat build, supaya cache core sudah siap
 # dan compile pertama pengguna tidak lambat

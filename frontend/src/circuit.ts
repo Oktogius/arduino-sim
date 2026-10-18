@@ -3,19 +3,20 @@
 
 import { DIGITAL_PINS, ANALOG_PINS } from "./pins";
 
-export type PartType = "led" | "button" | "pot";
+export type PartType = "led" | "button" | "pot" | "servo";
 
 export interface Part {
   id: number; // nomor unik selama halaman terbuka (tidak ikut disimpan)
   type: PartType;
   pin: string; // kunci di PINS, misalnya '13' atau 'A0'
-  color: string; // '' untuk potensiometer
+  color: string; // '' untuk potensiometer dan servo
 }
 
 export const PART_NAMES: Record<PartType, string> = {
   led: "LED",
   button: "Tombol",
   pot: "Potensiometer",
+  servo: "Servo",
 };
 
 // Warna yang tersedia. Komponen baru mengambil warna berikutnya secara bergiliran.
@@ -23,11 +24,12 @@ const COLORS: Record<PartType, string[]> = {
   led: ["red", "green", "yellow", "blue", "white"],
   button: ["green", "red", "blue", "yellow", "black"],
   pot: [""],
+  servo: [""],
 };
 
 // Urutan pin yang dicoba saat menambah komponen baru.
-// LED mulai dari 13 turun, tombol mulai dari 2 naik: mengikuti kebiasaan
-// contoh Arduino, dan keduanya jarang bertabrakan.
+// LED mulai dari 13 turun, tombol mulai dari 2 naik, servo mulai dari 9
+// (pin contoh Sweep/Knob): mengikuti kebiasaan contoh Arduino.
 const PIN_PREFERENCE: Record<PartType, string[]> = {
   led: [
     ...DIGITAL_PINS.filter((p) => !p.startsWith("A")).reverse(),
@@ -35,6 +37,7 @@ const PIN_PREFERENCE: Record<PartType, string[]> = {
   ],
   button: DIGITAL_PINS,
   pot: ANALOG_PINS,
+  servo: ["9", "10", ...DIGITAL_PINS.filter((p) => p !== "9" && p !== "10")],
 };
 
 const MAX_PARTS = DIGITAL_PINS.length; // satu pin satu komponen

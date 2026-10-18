@@ -5,6 +5,8 @@ import {
   avrInstruction,
   AVRTimer,
   timer0Config,
+  timer1Config,
+  timer2Config,
   AVRIOPort,
   portBConfig,
   portCConfig,
@@ -39,6 +41,12 @@ import {
   decodeCircuit,
 } from "./circuit";
 import { createBoard } from "./board";
+import {
+  type PulseMeter,
+  createPulseMeter,
+  measurePulse,
+  pulseToAngle,
+} from "./servo";
 
 const DEFAULT_CODE = `// Putar potensiometer untuk mengatur kecepatan kedip LED.
 // Tahan tombol untuk membuat LED menyala terus.
@@ -83,6 +91,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     <button class="secondary small" data-add="led">+ LED</button>
     <button class="secondary small" data-add="button">+ Tombol</button>
     <button class="secondary small" data-add="pot">+ Potensiometer</button>
+    <button class="secondary small" data-add="servo">+ Servo</button>
     <label class="toggle" title="Tiru getaran kontak tombol asli (1-5 ms)">
       <input id="bounce-toggle" type="checkbox" /> Bouncing
     </label>
@@ -145,14 +154,27 @@ let adc: AVRADC | null = null;
 let usartRx: AVRUSART | null = null;
 let rxQueue: number[] = [];
 
-// --- LED ---
+// --- Output: LED dan servo ---
+// Pengukur pulsa per servo (kunci = id komponen), dibuat ulang setiap Run
+const servoMeters = new Map<number, PulseMeter>();
+
 // Dipanggil setiap kali salah satu port berubah. Komponen biasanya hanya
-// beberapa, jadi cukup periksa semua LED tanpa perlu dipilah per port.
-function updateLeds() {
+// beberapa, jadi cukup periksa semuanya tanpa perlu dipilah per port.
+function onPortChange() {
   for (const part of board.parts()) {
-    if (part.type !== "led") continue;
+    if (part.type !== "led" && part.type !== "servo") continue;
     const { port, bit } = PINS[part.pin];
-    board.setLed(part.id, ports[port]?.pinState(bit) === PinState.High);
+    const high = ports[port]?.pinState(bit) === PinState.High;
+
+    if (part.type === "led") {
+      board.setLed(part.id, high);
+    } else if (activeCpu) {
+      // Servo: ukur lebar pulsa dalam siklus CPU, lalu ubah jadi sudut
+      let meter = servoMeters.get(part.id);
+      if (!meter) servoMeters.set(part.id, (meter = createPulseMeter()));
+      const us = measurePulse(meter, high, activeCpu.cycles);
+      if (us !== null) board.setServo(part.id, pulseToAngle(us), us);
+    }
   }
 }
 
@@ -275,13 +297,16 @@ function run(hex: string) {
   const cpu = new CPU(program);
   activeCpu = cpu;
   new AVRTimer(cpu, timer0Config); // dibutuhkan delay() dan millis()
+  new AVRTimer(cpu, timer1Config); // dibutuhkan library Servo.h
+  new AVRTimer(cpu, timer2Config); // analogWrite() di pin 3 dan 11, tone()
+  servoMeters.clear();
 
   // Ketiga port dibuat semua, karena LED dan tombol bisa di pin mana saja.
-  // Setiap kali port berubah, tampilan LED diperbarui.
+  // Setiap kali port berubah, tampilan LED dan servo diperbarui.
   ports.B = new AVRIOPort(cpu, portBConfig);
   ports.C = new AVRIOPort(cpu, portCConfig);
   ports.D = new AVRIOPort(cpu, portDConfig);
-  for (const port of Object.values(ports)) port!.addListener(updateLeds);
+  for (const port of Object.values(ports)) port!.addListener(onPortChange);
 
   // ADC untuk analogRead(). Tegangan referensi default 5 V (AVCC).
   adc = new AVRADC(cpu, adcConfig);

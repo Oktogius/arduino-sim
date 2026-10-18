@@ -6,6 +6,7 @@ import type {
   LEDElement,
   PushbuttonElement,
   PotentiometerElement,
+  ServoElement,
 } from "@wokwi/elements";
 import {
   type Part,
@@ -33,6 +34,7 @@ interface Entry {
   button?: PushbuttonElement;
   slider?: HTMLInputElement;
   knob?: PotentiometerElement;
+  servo?: ServoElement;
 }
 
 export function createBoard(
@@ -74,6 +76,12 @@ export function createBoard(
       );
       root.append(button);
       entry.button = button;
+    } else if (part.type === "servo") {
+      // Hanya tampilan: sudutnya diatur main.ts dari lebar pulsa di pin
+      const servo = document.createElement("wokwi-servo") as ServoElement;
+      servo.angle = 90; // posisi tengah sebelum ada pulsa
+      root.append(servo);
+      entry.servo = servo;
     } else {
       // Knob wokwi hanya tampilan; slider HTML yang jadi pengendali (Bab 10.3)
       const knob = document.createElement(
@@ -185,6 +193,17 @@ export function createBoard(
     setLed(id: number, on: boolean) {
       const led = find(id)?.led;
       if (led && led.value !== on) led.value = on;
+    },
+
+    // Sudut servo dan pembacaannya, misalnya "90° · 1472 µs".
+    // Teks hanya ditulis ulang kalau berubah (pulsa datang 50 kali per detik).
+    setServo(id: number, angle: number, us: number) {
+      const entry = find(id);
+      if (!entry?.servo) return;
+      const rounded = Math.round(angle);
+      if (entry.servo.angle !== rounded) entry.servo.angle = rounded;
+      const text = `${rounded}° · ${Math.round(us)} µs`;
+      if (entry.readout.textContent !== text) entry.readout.textContent = text;
     },
 
     ledsOff() {
