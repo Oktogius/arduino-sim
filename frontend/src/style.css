@@ -269,3 +269,71 @@ button.small {
 .example-note:empty {
   display: none;
 }
+
+/* Penjelasan error compile (Bahasa Indonesia), di atas pesan asli */
+.explain {
+  margin-top: 16px;
+}
+.explain:empty {
+  display: none;
+}
+.explain-heading {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.explain-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #aaa;
+}
+.explain-card {
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  background: #2a2525;
+  border-left: 3px solid #ff7b7b;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.explain-card p {
+  margin: 6px 0 0;
+}
+.explain-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.explain-title {
+  font-weight: 600;
+  color: #ffd2d2;
+}
+button.explain-line {
+  padding: 1px 8px;
+  font-size: 12px;
+  font-family: Consolas, monospace;
+  background: #5a2a2a;
+}
+button.explain-line:hover {
+  background: #7a3434;
+}
+.explain-source {
+  display: block;
+  margin-top: 6px;
+  padding: 4px 8px;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  color: #ddd;
+  background: #1a1717;
+  border-radius: 3px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.explain-tip {
+  color: #9fd8db;
+}
+.explain-original {
+  margin-top: 12px;
+  font-size: 12px;
+  color: #aaa;
+}

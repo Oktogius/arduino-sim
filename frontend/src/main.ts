@@ -23,6 +23,7 @@ import {
   addRunShortcut,
   showCompileErrors,
   clearCompileErrors,
+  goToLine,
 } from "./editor";
 import {
   loadSavedCode,
@@ -51,6 +52,8 @@ import { HD44780 } from "./lcd";
 import { DutyMeter } from "./pwm";
 import { EXAMPLES, DEFAULT_EXAMPLE, type Example } from "./examples";
 import { createGallery } from "./gallery";
+import { explainErrors } from "./explain";
+import { createExplainPanel } from "./explainPanel";
 
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   <h1>Arduino Sim</h1>
@@ -74,6 +77,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     </label>
   </div>
   <div id="board" class="board"></div>
+  <div id="explain"></div>
   <pre id="output"></pre>
   <div class="serial-header">
     <span>Serial Monitor</span>
@@ -95,6 +99,7 @@ const exampleBtn = document.querySelector<HTMLButtonElement>("#example")!;
 const exampleNoteEl =
   document.querySelector<HTMLParagraphElement>("#example-note")!;
 const outputEl = document.querySelector<HTMLPreElement>("#output")!;
+const explainEl = document.querySelector<HTMLDivElement>("#explain")!;
 const serialEl = document.querySelector<HTMLPreElement>("#serial")!;
 const clearBtn = document.querySelector<HTMLButtonElement>("#clear")!;
 const serialForm = document.querySelector<HTMLFormElement>("#serial-form")!;
@@ -116,6 +121,12 @@ editor.onDidChangeModelContent(() => {
   clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => saveCode(editor.getValue()), 500);
 });
+// Penjelasan error dalam Bahasa Indonesia, di atas pesan asli compiler.
+// Klik "Baris N" di kartu penjelasan untuk melompat ke baris itu.
+const explainPanel = createExplainPanel(explainEl, (line) =>
+  goToLine(editor, line),
+);
+
 // Ctrl+Enter = Compile & Run (kecuali sedang compile)
 addRunShortcut(editor, () => {
   if (!runBtn.disabled) runBtn.click();
@@ -401,6 +412,7 @@ function stop() {
 runBtn.addEventListener("click", async () => {
   stop();
   outputEl.textContent = "";
+  explainPanel.clear();
   serialEl.textContent = "";
   statusEl.textContent = "Compiling...";
   runBtn.disabled = true;
@@ -408,8 +420,11 @@ runBtn.addEventListener("click", async () => {
   // tengah compile, kode lama akan berjalan di rangkaian baru.
   exampleBtn.disabled = true;
   clearCompileErrors(editor);
+  // Kode yang dikirim disimpan, supaya penjelasan error membaca baris yang
+  // sama dengan yang di-compile
+  const code = editor.getValue();
   try {
-    const hex = await compile(editor.getValue());
+    const hex = await compile(code);
     run(hex);
     setEditable(false);
     statusEl.textContent = "Berjalan";
@@ -418,7 +433,12 @@ runBtn.addEventListener("click", async () => {
     const message = String(err instanceof Error ? err.message : err);
     statusEl.textContent = "Gagal"; // sebelumnya tetap tertulis "Compiling..."
     outputEl.textContent = message;
-    showCompileErrors(editor, message); // garis merah di baris yang error
+    // Penjelasan Bahasa Indonesia (kosong kalau bukan error dari compiler,
+    // misalnya server tidak bisa dihubungi)
+    const explanations = explainErrors(message, code);
+    explainPanel.show(explanations);
+    // Garis merah di baris yang error, biru di baris yang perlu diperiksa
+    showCompileErrors(editor, message, explanations);
   } finally {
     runBtn.disabled = false;
     exampleBtn.disabled = false;
@@ -475,6 +495,7 @@ function loadExample(example: Example) {
   // Pesan error dan tanda merah milik kode lama tidak berlaku lagi
   clearCompileErrors(editor);
   outputEl.textContent = "";
+  explainPanel.clear();
 
   const libs = example.libraries.map((lib) => `<${lib}.h>`).join(", ");
   exampleNoteEl.textContent =
