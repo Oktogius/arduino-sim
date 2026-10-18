@@ -47,6 +47,7 @@ import {
   measurePulse,
   pulseToAngle,
 } from "./servo";
+import { HD44780 } from "./lcd";
 
 const DEFAULT_CODE = `// Putar potensiometer untuk mengatur kecepatan kedip LED.
 // Tahan tombol untuk membuat LED menyala terus.
@@ -92,6 +93,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     <button class="secondary small" data-add="button">+ Tombol</button>
     <button class="secondary small" data-add="pot">+ Potensiometer</button>
     <button class="secondary small" data-add="servo">+ Servo</button>
+    <button class="secondary small" data-add="lcd">+ LCD</button>
     <label class="toggle" title="Tiru getaran kontak tombol asli (1-5 ms)">
       <input id="bounce-toggle" type="checkbox" /> Bouncing
     </label>
@@ -154,17 +156,54 @@ let adc: AVRADC | null = null;
 let usartRx: AVRUSART | null = null;
 let rxQueue: number[] = [];
 
-// --- Output: LED dan servo ---
+// --- Output: LED, servo, dan LCD ---
 // Pengukur pulsa per servo (kunci = id komponen), dibuat ulang setiap Run
 const servoMeters = new Map<number, PulseMeter>();
+
+// Chip LCD per komponen, beserta kondisi pin E sebelumnya (untuk mendeteksi E turun)
+const lcds = new Map<number, { chip: HD44780; lastE: boolean }>();
+
+// Apakah pin sedang HIGH (dikeluarkan Arduino sebagai output HIGH)
+function isHigh(pin: string): boolean {
+  const { port, bit } = PINS[pin];
+  return ports[port]?.pinState(bit) === PinState.High;
+}
+
+// Pin E LCD baru saja turun: baca RS dan D4..D7, kirim ke chip
+function updateLcd(part: Part) {
+  let lcd = lcds.get(part.id);
+  if (!lcd) lcds.set(part.id, (lcd = { chip: new HD44780(), lastE: false }));
+  const [rs, e, d4, d5, d6, d7] = part.pins;
+  const eHigh = isHigh(e);
+  if (lcd.lastE && !eHigh) {
+    const nibble =
+      (isHigh(d7) ? 8 : 0) |
+      (isHigh(d6) ? 4 : 0) |
+      (isHigh(d5) ? 2 : 0) |
+      (isHigh(d4) ? 1 : 0);
+    lcd.chip.pulse(isHigh(rs), nibble);
+  }
+  lcd.lastE = eHigh;
+}
+
+// Gambar layar LCD yang berubah. Dipanggil sekali per frame, bukan setiap
+// pulsa E: satu lcd.print("Halo") saja sudah 8 pulsa (batching, Bab 6.2).
+function renderLcds() {
+  for (const [id, { chip }] of lcds) {
+    if (chip.dirty) board.setLcd(id, chip.view());
+  }
+}
 
 // Dipanggil setiap kali salah satu port berubah. Komponen biasanya hanya
 // beberapa, jadi cukup periksa semuanya tanpa perlu dipilah per port.
 function onPortChange() {
   for (const part of board.parts()) {
+    if (part.type === "lcd") {
+      updateLcd(part);
+      continue;
+    }
     if (part.type !== "led" && part.type !== "servo") continue;
-    const { port, bit } = PINS[part.pin];
-    const high = ports[port]?.pinState(bit) === PinState.High;
+    const high = isHigh(part.pins[0]);
 
     if (part.type === "led") {
       board.setLed(part.id, high);
@@ -182,7 +221,7 @@ function onPortChange() {
 // Rangkaian virtual: tombol ke GND, dipakai dengan INPUT_PULLUP.
 // Dilepas = HIGH, ditekan = LOW (active low).
 function setButtonPin(part: Part, level: boolean) {
-  const { port, bit } = PINS[part.pin];
+  const { port, bit } = PINS[part.pins[0]];
   ports[port]?.setPin(bit, level);
 }
 
@@ -213,7 +252,7 @@ function onButton(part: Part, pressed: boolean) {
 // Slider 0..1023 diubah menjadi tegangan 0..5 V.
 // ADC chip lalu mengubah tegangan itu kembali menjadi angka 0..1023.
 function onPot(part: Part, raw: number) {
-  const channel = PINS[part.pin].adc!;
+  const channel = PINS[part.pins[0]].adc!;
   if (adc) adc.channelValues[channel] = (raw / 1023) * 5;
 }
 
@@ -300,6 +339,7 @@ function run(hex: string) {
   new AVRTimer(cpu, timer1Config); // dibutuhkan library Servo.h
   new AVRTimer(cpu, timer2Config); // analogWrite() di pin 3 dan 11, tone()
   servoMeters.clear();
+  lcds.clear(); // LCD baru setiap Run: seperti listrik baru dinyalakan
 
   // Ketiga port dibuat semua, karena LED dan tombol bisa di pin mana saja.
   // Setiap kali port berubah, tampilan LED dan servo diperbarui.
@@ -338,6 +378,8 @@ function run(hex: string) {
     }
     // Cadangan: coba kirim antrean serial sekali per frame
     pumpRx();
+    renderLcds();
+
     // Batching: tampilkan teks serial sekali per frame
     if (serialBuffer) {
       serialEl.textContent = (serialEl.textContent + serialBuffer).slice(
@@ -359,7 +401,7 @@ function stop() {
   adc = null;
   usartRx = null;
   rxQueue = [];
-  board.ledsOff();
+  board.outputsOff();
   setEditable(true);
   stopBtn.disabled = true;
   statusEl.textContent = "Berhenti";

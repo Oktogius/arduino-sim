@@ -7,15 +7,18 @@ import type {
   PushbuttonElement,
   PotentiometerElement,
   ServoElement,
+  LCD1602Element,
 } from "@wokwi/elements";
 import {
   type Part,
   type PartType,
   PART_NAMES,
+  PIN_ROLES,
   allowedPins,
   usedPins,
   createPart,
 } from "./circuit";
+import type { LcdView } from "./lcd";
 
 export interface BoardHandlers {
   onButton(part: Part, pressed: boolean): void; // tombol ditekan / dilepas
@@ -27,7 +30,7 @@ export interface BoardHandlers {
 interface Entry {
   part: Part;
   root: HTMLDivElement;
-  select: HTMLSelectElement;
+  selects: HTMLSelectElement[]; // satu dropdown per pin
   removeBtn: HTMLButtonElement;
   readout: HTMLSpanElement;
   led?: LEDElement;
@@ -35,6 +38,7 @@ interface Entry {
   slider?: HTMLInputElement;
   knob?: PotentiometerElement;
   servo?: ServoElement;
+  lcd?: LCD1602Element;
 }
 
 export function createBoard(
@@ -76,6 +80,12 @@ export function createBoard(
       );
       root.append(button);
       entry.button = button;
+    } else if (part.type === "lcd") {
+      // Hanya tampilan: isi layarnya dihitung lcd.ts dari sinyal di pin
+      const lcd = document.createElement("wokwi-lcd1602") as LCD1602Element;
+      lcd.characters = new Uint8Array(32).fill(0x20); // layar kosong
+      root.append(lcd);
+      entry.lcd = lcd;
     } else if (part.type === "servo") {
       // Hanya tampilan: sudutnya diatur main.ts dari lebar pulsa di pin
       const servo = document.createElement("wokwi-servo") as ServoElement;
@@ -102,17 +112,23 @@ export function createBoard(
       Object.assign(entry, { slider, knob });
     }
 
-    // Baris nama + dropdown pin + tombol hapus
+    // Baris nama + dropdown pin + tombol hapus.
+    // Komponen satu pin: semuanya dalam satu baris.
+    // Komponen banyak pin (LCD): dropdown berlabel di bawah nama.
     const row = document.createElement("div");
     row.className = "part-pin";
     const name = document.createElement("span");
     name.textContent = PART_NAMES[part.type];
-    const select = document.createElement("select");
-    select.setAttribute("aria-label", `Pin ${PART_NAMES[part.type]}`);
-    select.addEventListener("change", () => {
-      part.pin = select.value;
-      refreshPinOptions();
-      handlers.onEdit(parts());
+    const roles = PIN_ROLES[part.type];
+    const selects = roles.map((role, index) => {
+      const select = document.createElement("select");
+      select.setAttribute("aria-label", `Pin ${role || PART_NAMES[part.type]}`);
+      select.addEventListener("change", () => {
+        part.pins[index] = select.value;
+        refreshPinOptions();
+        handlers.onEdit(parts());
+      });
+      return select;
     });
     const removeBtn = document.createElement("button");
     removeBtn.className = "remove";
@@ -124,13 +140,25 @@ export function createBoard(
       refreshPinOptions();
       handlers.onEdit(parts());
     });
-    row.append(name, select, removeBtn);
-
     const readout = document.createElement("span");
     readout.className = "readout";
-    root.append(row, readout);
 
-    Object.assign(entry, { select, removeBtn, readout });
+    if (roles.length === 1) {
+      row.append(name, selects[0], removeBtn);
+      root.append(row, readout);
+    } else {
+      row.append(name, removeBtn);
+      const grid = document.createElement("div");
+      grid.className = "pin-grid";
+      roles.forEach((role, i) => {
+        const label = document.createElement("label");
+        label.append(role, selects[i]);
+        grid.append(label);
+      });
+      root.append(row, grid, readout);
+    }
+
+    Object.assign(entry, { selects, removeBtn, readout });
     if (entry.slider) updatePotDisplay(entry); // tampilkan nilai awal
     return entry;
   }
@@ -142,19 +170,27 @@ export function createBoard(
   }
 
   // Isi ulang pilihan pin di semua dropdown.
-  // Pin yang sudah dipakai komponen lain ditampilkan tapi tidak bisa dipilih.
+  // Pin yang sudah dipakai (komponen lain, atau pin lain di komponen yang sama)
+  // ditampilkan tapi tidak bisa dipilih.
   function refreshPinOptions() {
     const all = parts();
-    for (const { part, select, removeBtn } of entries) {
-      const used = usedPins(all, part.id);
-      select.replaceChildren(
-        ...allowedPins(part.type).map((pin) => {
-          const option = new Option(pin, pin, false, pin === part.pin);
-          option.disabled = used.has(pin);
-          return option;
-        }),
-      );
-      select.disabled = !editable;
+    for (const { part, selects, removeBtn } of entries) {
+      selects.forEach((select, index) => {
+        const used = usedPins(all, part.id, index);
+        select.replaceChildren(
+          ...allowedPins(part.type).map((pin) => {
+            const option = new Option(
+              pin,
+              pin,
+              false,
+              pin === part.pins[index],
+            );
+            option.disabled = used.has(pin);
+            return option;
+          }),
+        );
+        select.disabled = !editable;
+      });
       removeBtn.disabled = !editable;
     }
   }
@@ -206,8 +242,27 @@ export function createBoard(
       if (entry.readout.textContent !== text) entry.readout.textContent = text;
     },
 
-    ledsOff() {
-      for (const e of entries) if (e.led) e.led.value = false;
+    // Gambar isi layar LCD. Dipanggil paling banyak sekali per frame.
+    setLcd(id: number, view: LcdView) {
+      const lcd = find(id)?.lcd;
+      if (!lcd) return;
+      lcd.characters = view.characters;
+      lcd.font = view.font;
+      lcd.cursor = view.cursor;
+      lcd.blink = view.blink;
+      lcd.cursorX = view.cursorX;
+      lcd.cursorY = view.cursorY;
+    },
+
+    // Saat emulator berhenti: LED padam, layar LCD kosong (seperti listrik dicabut)
+    outputsOff() {
+      for (const e of entries) {
+        if (e.led) e.led.value = false;
+        if (e.lcd) {
+          e.lcd.characters = new Uint8Array(32).fill(0x20);
+          e.lcd.cursor = e.lcd.blink = false;
+        }
+      }
     },
 
     isPressed: (id: number) => find(id)?.button?.pressed ?? false,

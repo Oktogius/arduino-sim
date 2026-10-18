@@ -3,13 +3,13 @@
 
 import { DIGITAL_PINS, ANALOG_PINS } from "./pins";
 
-export type PartType = "led" | "button" | "pot" | "servo";
+export type PartType = "led" | "button" | "pot" | "servo" | "lcd";
 
 export interface Part {
   id: number; // nomor unik selama halaman terbuka (tidak ikut disimpan)
   type: PartType;
-  pin: string; // kunci di PINS, misalnya '13' atau 'A0'
-  color: string; // '' untuk potensiometer dan servo
+  pins: string[]; // kunci di PINS, urut sesuai PIN_ROLES (komponen biasa: 1 pin)
+  color: string; // '' untuk komponen tanpa pilihan warna
 }
 
 export const PART_NAMES: Record<PartType, string> = {
@@ -17,6 +17,17 @@ export const PART_NAMES: Record<PartType, string> = {
   button: "Tombol",
   pot: "Potensiometer",
   servo: "Servo",
+  lcd: "LCD 16x2",
+};
+
+// Nama tiap pin komponen. Komponen satu pin cukup [''] (tanpa label).
+// Urutan pin LCD sama dengan urutan di kode: LiquidCrystal lcd(RS, E, D4, D5, D6, D7)
+export const PIN_ROLES: Record<PartType, string[]> = {
+  led: [""],
+  button: [""],
+  pot: [""],
+  servo: [""],
+  lcd: ["RS", "E", "D4", "D5", "D6", "D7"],
 };
 
 // Warna yang tersedia. Komponen baru mengambil warna berikutnya secara bergiliran.
@@ -25,11 +36,18 @@ const COLORS: Record<PartType, string[]> = {
   button: ["green", "red", "blue", "yellow", "black"],
   pot: [""],
   servo: [""],
+  lcd: [""],
 };
 
-// Urutan pin yang dicoba saat menambah komponen baru.
-// LED mulai dari 13 turun, tombol mulai dari 2 naik, servo mulai dari 9
-// (pin contoh Sweep/Knob): mengikuti kebiasaan contoh Arduino.
+// Pin dipindah ke depan daftar, sisanya mengikuti urutan biasa
+const preferring = (first: string[]) => [
+  ...first,
+  ...DIGITAL_PINS.filter((p) => !first.includes(p)),
+];
+
+// Urutan pin yang dicoba saat menambah komponen baru, mengikuti kebiasaan
+// contoh Arduino: LED dari 13 turun, tombol dari 2 naik, servo di 9 (Sweep/Knob),
+// LCD di 12, 11, 5, 4, 3, 2 (HelloWorld LiquidCrystal).
 const PIN_PREFERENCE: Record<PartType, string[]> = {
   led: [
     ...DIGITAL_PINS.filter((p) => !p.startsWith("A")).reverse(),
@@ -37,10 +55,9 @@ const PIN_PREFERENCE: Record<PartType, string[]> = {
   ],
   button: DIGITAL_PINS,
   pot: ANALOG_PINS,
-  servo: ["9", "10", ...DIGITAL_PINS.filter((p) => p !== "9" && p !== "10")],
+  servo: preferring(["9", "10"]),
+  lcd: preferring(["12", "11", "5", "4", "3", "2"]),
 };
-
-const MAX_PARTS = DIGITAL_PINS.length; // satu pin satu komponen
 
 let nextId = 1;
 
@@ -48,61 +65,86 @@ export function allowedPins(type: PartType): string[] {
   return type === "pot" ? ANALOG_PINS : DIGITAL_PINS;
 }
 
-// Pin yang sedang dipakai komponen lain (kecuali komponen exceptId)
+// Semua pin yang sedang dipakai, kecuali satu pin milik komponen exceptId
+// di urutan exceptIndex (pin yang sedang dipilih di dropdown itu sendiri).
 export function usedPins(
   parts: readonly Part[],
   exceptId?: number,
+  exceptIndex?: number,
 ): Set<string> {
-  return new Set(parts.filter((p) => p.id !== exceptId).map((p) => p.pin));
+  const used = new Set<string>();
+  for (const p of parts) {
+    p.pins.forEach((pin, i) => {
+      if (!(p.id === exceptId && i === exceptIndex)) used.add(pin);
+    });
+  }
+  return used;
 }
 
-// Membuat komponen baru di pin kosong pertama. null kalau tidak ada pin kosong.
+// Membuat komponen baru di pin-pin kosong pertama. null kalau pin tidak cukup.
 export function createPart(
   parts: readonly Part[],
   type: PartType,
 ): Part | null {
-  if (parts.length >= MAX_PARTS) return null;
   const used = usedPins(parts);
-  const pin = PIN_PREFERENCE[type].find((p) => !used.has(p));
-  if (!pin) return null;
+  const pins: string[] = [];
+  for (let i = 0; i < PIN_ROLES[type].length; i++) {
+    const pin = PIN_PREFERENCE[type].find((p) => !used.has(p));
+    if (!pin) return null;
+    pins.push(pin);
+    used.add(pin);
+  }
   const sameType = parts.filter((p) => p.type === type).length;
   const palette = COLORS[type];
-  return { id: nextId++, type, pin, color: palette[sameType % palette.length] };
+  return {
+    id: nextId++,
+    type,
+    pins,
+    color: palette[sameType % palette.length],
+  };
 }
 
 export function defaultCircuit(): Part[] {
-  // Sama dengan rangkaian sebelum v1.2, supaya contoh kode bawaan tetap jalan
+  // Sama dengan rangkaian awal, supaya contoh kode bawaan tetap jalan
   return decodeCircuit("led-13-red.button-2-green.pot-A0")!;
 }
 
 // --- Bentuk teks untuk disimpan dan untuk link berbagi ---
-// Contoh: "led-13-red.button-2-green.pot-A0"
+// Format tiap komponen: jenis-pin[-pin...][-warna], dipisah titik.
+// Contoh: "led-13-red.button-2-green.pot-A0.lcd-12-11-5-4-3-2"
 // Hanya huruf, angka, "-" dan ".", jadi aman di URL tanpa diubah apa pun.
 
 export function encodeCircuit(parts: readonly Part[]): string {
   return parts
-    .map((p) => [p.type, p.pin, p.color].filter(Boolean).join("-"))
+    .map((p) => [p.type, ...p.pins, p.color].filter(Boolean).join("-"))
     .join(".");
 }
 
 // Teks dari link bisa dibuat siapa saja, jadi semua isinya diperiksa:
-// jenis komponen, pin, dan warna harus ada di daftar yang diizinkan.
+// jenis komponen, jumlah pin, pin, dan warna harus ada di daftar yang diizinkan.
 // Kalau ada yang tidak cocok, seluruh rangkaian ditolak (null).
 export function decodeCircuit(text: string): Part[] | null {
   if (text === "") return []; // semua komponen sengaja dihapus
   if (text.length > 500) return null;
   const parts: Part[] = [];
+  const used = new Set<string>();
   for (const item of text.split(".")) {
-    const [type, pin, color = ""] = item.split("-");
-    // Object.hasOwn, bukan "in": "toString" in COLORS juga bernilai true
-    if (!Object.hasOwn(COLORS, type)) return null;
+    const [type, ...rest] = item.split("-");
+    // Object.hasOwn, bukan "in": "toString" in PIN_ROLES juga bernilai true
+    if (!Object.hasOwn(PIN_ROLES, type)) return null;
     const partType = type as PartType;
-    if (!allowedPins(partType).includes(pin)) return null;
+    const count = PIN_ROLES[partType].length;
+    const pins = rest.slice(0, count);
+    const color = rest[count] ?? "";
+    if (pins.length !== count || rest.length > count + 1) return null;
     if (!COLORS[partType].includes(color)) return null;
-    if (parts.some((p) => p.pin === pin)) return null; // pin ganda
-    parts.push({ id: nextId++, type: partType, pin, color });
+    for (const pin of pins) {
+      if (!allowedPins(partType).includes(pin) || used.has(pin)) return null; // pin asing / ganda
+      used.add(pin);
+    }
+    parts.push({ id: nextId++, type: partType, pins, color });
   }
-  return parts.length <= MAX_PARTS ? parts : null;
+  return parts;
 }
 
 // --- Simpan otomatis di browser (pola yang sama dengan share.ts) ---

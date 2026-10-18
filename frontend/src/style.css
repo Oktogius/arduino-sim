@@ -157,7 +157,7 @@ button.small {
   align-items: center;
   gap: 4px;
 }
-.part-pin select {
+.component select {
   padding: 1px 2px;
   font-size: 12px;
   background: #083a50;
@@ -175,7 +175,20 @@ button.small {
 .part-pin .remove:hover:not(:disabled) {
   color: #ff7b7b;
 }
-.part-pin select:disabled,
+.component select:disabled,
 .part-pin .remove:disabled {
   opacity: 0.4;
+}
+
+/* Dropdown pin untuk komponen banyak pin (LCD): RS, E, D4..D7 */
+.pin-grid {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 4px 10px;
+  font-size: 11px;
+}
+.pin-grid label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
 }
