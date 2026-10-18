@@ -19,10 +19,20 @@ import {
   createPart,
 } from "./circuit";
 import type { LcdView } from "./lcd";
+import {
+  SLIDER_MAX,
+  luxFromSlider,
+  sliderFromLux,
+  formatLux,
+  ldrVoltage,
+} from "./ldr";
+import { MIN_CM, MAX_CM } from "./ultrasonic";
+import { TEMP_MIN, TEMP_MAX } from "./dht22";
 
 export interface BoardHandlers {
   onButton(part: Part, pressed: boolean): void; // tombol ditekan / dilepas
   onPot(part: Part, raw: number): void; // slider potensiometer digeser (0..1023)
+  onLdr(part: Part, lux: number): void; // slider cahaya LDR digeser
   onEdit(parts: readonly Part[]): void; // rangkaian berubah (tambah/hapus/ganti pin)
 }
 
@@ -39,6 +49,33 @@ interface Entry {
   knob?: PotentiometerElement;
   servo?: ServoElement;
   lcd?: LCD1602Element;
+  sliders?: HTMLInputElement[]; // nilai sensor: cahaya / jarak / suhu + kelembapan
+}
+
+// Nilai awal sensor
+const DEFAULT_LUX = 500; // ruangan berlampu
+const DEFAULT_CM = 100;
+const DEFAULT_TEMP = 24;
+const DEFAULT_HUM = 40;
+
+// Slider berlabel untuk nilai sensor, misalnya "Jarak" atau "Suhu"
+function makeSlider(
+  label: string,
+  min: number,
+  max: number,
+  step: number,
+  value: number,
+): { wrap: HTMLLabelElement; input: HTMLInputElement } {
+  const wrap = document.createElement("label");
+  wrap.className = "sensor-slider";
+  const input = document.createElement("input");
+  input.type = "range";
+  input.min = String(min);
+  input.max = String(max);
+  input.step = String(step);
+  input.value = String(value);
+  wrap.append(label, input);
+  return { wrap, input };
 }
 
 export function createBoard(
@@ -92,6 +129,43 @@ export function createBoard(
       servo.angle = 90; // posisi tengah sebelum ada pulsa
       root.append(servo);
       entry.servo = servo;
+    } else if (part.type === "ldr") {
+      // Modul fotoresistor: hanya tampilan; cahaya diatur lewat slider (skala log)
+      const el = document.createElement("wokwi-photoresistor-sensor");
+      const { wrap, input } = makeSlider(
+        "Cahaya",
+        0,
+        SLIDER_MAX,
+        1,
+        sliderFromLux(DEFAULT_LUX),
+      );
+      input.addEventListener("input", () => {
+        updateSensorDisplay(entry);
+        handlers.onLdr(part, luxFromSlider(Number(input.value)));
+      });
+      root.append(el, wrap);
+      entry.sliders = [input];
+    } else if (part.type === "ultrasonic") {
+      const el = document.createElement("wokwi-hc-sr04");
+      const { wrap, input } = makeSlider(
+        "Jarak",
+        MIN_CM,
+        MAX_CM,
+        1,
+        DEFAULT_CM,
+      );
+      input.addEventListener("input", () => updateSensorDisplay(entry));
+      root.append(el, wrap);
+      entry.sliders = [input];
+    } else if (part.type === "dht22") {
+      const el = document.createElement("wokwi-dht22");
+      const temp = makeSlider("Suhu", TEMP_MIN, TEMP_MAX, 0.5, DEFAULT_TEMP);
+      const hum = makeSlider("Lembap", 0, 100, 0.5, DEFAULT_HUM);
+      for (const { input } of [temp, hum]) {
+        input.addEventListener("input", () => updateSensorDisplay(entry));
+      }
+      root.append(el, temp.wrap, hum.wrap);
+      entry.sliders = [temp.input, hum.input];
     } else {
       // Knob wokwi hanya tampilan; slider HTML yang jadi pengendali (Bab 10.3)
       const knob = document.createElement(
@@ -160,7 +234,34 @@ export function createBoard(
 
     Object.assign(entry, { selects, removeBtn, readout });
     if (entry.slider) updatePotDisplay(entry); // tampilkan nilai awal
+    if (entry.sliders) updateSensorDisplay(entry);
     return entry;
+  }
+
+  // Nilai sensor dibaca langsung dari slider milik komponen itu.
+  // Memakai entry (bukan id), karena saat build() komponen belum masuk daftar.
+  const sliderOf = (e: Entry | undefined, index: number) =>
+    Number(e?.sliders?.[index]?.value ?? NaN);
+  const luxOf = (e: Entry | undefined) => luxFromSlider(sliderOf(e, 0));
+  const climateOf = (e: Entry | undefined) => ({
+    temp: sliderOf(e, 0),
+    hum: sliderOf(e, 1),
+  });
+  const lux = (id: number) => luxOf(find(id));
+  const distance = (id: number) => sliderOf(find(id), 0);
+  const climate = (id: number) => climateOf(find(id));
+
+  // Pembacaan di bawah sensor, gaya sama dengan "512 · 2.50 V"
+  function updateSensorDisplay(entry: Entry) {
+    if (entry.part.type === "ldr") {
+      const l = luxOf(entry);
+      entry.readout.textContent = `${formatLux(l)} lux · ${ldrVoltage(l).toFixed(2)} V`;
+    } else if (entry.part.type === "ultrasonic") {
+      entry.readout.textContent = `${sliderOf(entry, 0)} cm`;
+    } else if (entry.part.type === "dht22") {
+      const { temp, hum } = climateOf(entry);
+      entry.readout.textContent = `${temp.toFixed(1)} °C · ${hum.toFixed(1)} %`;
+    }
   }
 
   function updatePotDisplay(entry: Entry) {
@@ -273,6 +374,9 @@ export function createBoard(
       }
     },
 
+    lux,
+    distance,
+    climate,
     isPressed: (id: number) => find(id)?.button?.pressed ?? false,
     potRaw: (id: number) => Number(find(id)?.slider?.value ?? 0),
 

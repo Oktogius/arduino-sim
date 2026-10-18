@@ -3,7 +3,15 @@
 
 import { DIGITAL_PINS, ANALOG_PINS } from "./pins";
 
-export type PartType = "led" | "button" | "pot" | "servo" | "lcd";
+export type PartType =
+  | "led"
+  | "button"
+  | "pot"
+  | "servo"
+  | "lcd"
+  | "ldr"
+  | "ultrasonic"
+  | "dht22";
 
 export interface Part {
   id: number; // nomor unik selama halaman terbuka (tidak ikut disimpan)
@@ -18,6 +26,9 @@ export const PART_NAMES: Record<PartType, string> = {
   pot: "Potensiometer",
   servo: "Servo",
   lcd: "LCD 16x2",
+  ldr: "LDR",
+  ultrasonic: "HC-SR04",
+  dht22: "DHT22",
 };
 
 // Nama tiap pin komponen. Komponen satu pin cukup [''] (tanpa label).
@@ -28,6 +39,9 @@ export const PIN_ROLES: Record<PartType, string[]> = {
   pot: [""],
   servo: [""],
   lcd: ["RS", "E", "D4", "D5", "D6", "D7"],
+  ldr: [""], // pin AO modul ke pin analog
+  ultrasonic: ["TRIG", "ECHO"],
+  dht22: [""], // pin data
 };
 
 // Warna yang tersedia. Komponen baru mengambil warna berikutnya secara bergiliran.
@@ -37,6 +51,9 @@ const COLORS: Record<PartType, string[]> = {
   pot: [""],
   servo: [""],
   lcd: [""],
+  ldr: [""],
+  ultrasonic: [""],
+  dht22: [""],
 };
 
 // Pin dipindah ke depan daftar, sisanya mengikuti urutan biasa
@@ -47,7 +64,8 @@ const preferring = (first: string[]) => [
 
 // Urutan pin yang dicoba saat menambah komponen baru, mengikuti kebiasaan
 // contoh Arduino: LED dari 13 turun, tombol dari 2 naik, servo di 9 (Sweep/Knob),
-// LCD di 12, 11, 5, 4, 3, 2 (HelloWorld LiquidCrystal).
+// LCD di 12, 11, 5, 4, 3, 2 (HelloWorld LiquidCrystal), HC-SR04 di TRIG 9 /
+// ECHO 10 dan DHT22 di pin 2 (contoh yang paling banyak beredar).
 const PIN_PREFERENCE: Record<PartType, string[]> = {
   led: [
     ...DIGITAL_PINS.filter((p) => !p.startsWith("A")).reverse(),
@@ -57,12 +75,16 @@ const PIN_PREFERENCE: Record<PartType, string[]> = {
   pot: ANALOG_PINS,
   servo: preferring(["9", "10"]),
   lcd: preferring(["12", "11", "5", "4", "3", "2"]),
+  ldr: ANALOG_PINS,
+  ultrasonic: preferring(["9", "10"]),
+  dht22: DIGITAL_PINS,
 };
 
 let nextId = 1;
 
 export function allowedPins(type: PartType): string[] {
-  return type === "pot" ? ANALOG_PINS : DIGITAL_PINS;
+  // Potensiometer dan LDR butuh ADC, jadi hanya A0..A5
+  return type === "pot" || type === "ldr" ? ANALOG_PINS : DIGITAL_PINS;
 }
 
 // Semua pin yang sedang dipakai, kecuali satu pin milik komponen exceptId

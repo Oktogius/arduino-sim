@@ -411,3 +411,16 @@ button.tab.active {
   width: 100%;
   min-height: 0;
 }
+
+/* Slider nilai sensor (cahaya, jarak, suhu, kelembapan) */
+.sensor-slider {
+  display: grid;
+  grid-template-columns: 3.6em 110px; /* label sejajar, slider sama panjang */
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.sensor-slider input {
+  width: 110px;
+  accent-color: #00979d;
+}

@@ -21,6 +21,7 @@ export interface Example {
 
 const DASAR = "Dasar";
 const TOMBOL = "Tombol";
+const SENSOR = "Sensor";
 const LIBRARY = "Butuh library";
 
 export const EXAMPLES: readonly Example[] = [
@@ -309,6 +310,118 @@ void loop() {
   }
 
   delay(10);  // debounce sederhana, lebih lama dari getaran terpanjang
+}
+`,
+  },
+  {
+    id: "ldr",
+    title: "LDR: lampu otomatis",
+    group: SENSOR,
+    summary:
+      "LED menyala sendiri saat gelap. Nilai lux dihitung dari analogRead().",
+    howTo:
+      "Geser slider Cahaya ke kiri (gelap, di bawah 50 lux): LED menyala. " +
+      "Nilai lux juga tampil di Serial Monitor dan Serial Plotter.",
+    libraries: [],
+    circuit: "ldr-A0.led-13-yellow",
+    code: `// LDR: LED menyala otomatis saat gelap.
+// Rumus lux sama dengan modul fotoresistor di Wokwi.
+const float GAMMA = 0.7;
+const float RL10 = 50;   // hambatan LDR (kΩ) pada 10 lux
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(13, OUTPUT);
+}
+
+void loop() {
+  int nilai = analogRead(A0);          // gelap = besar, terang = kecil
+  float tegangan = nilai / 1024.0 * 5;
+  float hambatan = 2000 * tegangan / (1 - tegangan / 5);
+  float lux = pow(RL10 * 1e3 * pow(10, GAMMA) / hambatan, 1 / GAMMA);
+
+  digitalWrite(13, lux < 50 ? HIGH : LOW);   // gelap: lampu menyala
+  Serial.print("lux:");
+  Serial.println(lux);
+  delay(200);
+}
+`,
+  },
+  {
+    id: "hc-sr04",
+    title: "HC-SR04: ukur jarak",
+    group: SENSOR,
+    summary:
+      "Jarak benda diukur dengan pulseIn(). LED menyala kalau benda lebih dekat dari 20 cm.",
+    howTo:
+      "Geser slider Jarak: angka di Serial Monitor mengikuti. Di bawah 20 cm, LED menyala.",
+    libraries: [],
+    circuit: "ultrasonic-9-10.led-13-red",
+    code: `// HC-SR04: mengukur jarak dengan gelombang ultrasonik.
+// LED menyala kalau ada benda lebih dekat dari 20 cm.
+const int TRIG = 9;
+const int ECHO = 10;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(TRIG, OUTPUT);
+  pinMode(ECHO, INPUT);
+  pinMode(13, OUTPUT);
+}
+
+void loop() {
+  // Pulsa 10 µs di TRIG memulai pengukuran
+  digitalWrite(TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG, LOW);
+
+  // ECHO HIGH selama gelombang pergi lalu memantul kembali (dalam µs)
+  long durasi = pulseIn(ECHO, HIGH);
+  float jarak = durasi / 58.0;        // sekitar 58 µs per cm (pergi-pulang)
+
+  digitalWrite(13, jarak < 20 ? HIGH : LOW);
+  Serial.print("jarak:");
+  Serial.println(jarak);
+  delay(100);
+}
+`,
+  },
+  {
+    id: "dht22",
+    title: "DHT22: suhu & kelembapan",
+    group: SENSOR,
+    summary:
+      "Membaca suhu dan kelembapan setiap 2 detik dengan library DHT dari Adafruit.",
+    howTo:
+      "Geser slider Suhu dan Lembap: nilai baru terbaca paling lambat 2 detik kemudian " +
+      "(DHT22 memang hanya boleh dibaca tiap 2 detik). Coba juga tab Serial Plotter.",
+    libraries: ["DHT"],
+    circuit: "dht22-2",
+    code: `// DHT22: membaca suhu dan kelembapan.
+// Butuh library "DHT sensor library" dari Adafruit.
+#include <DHT.h>
+
+DHT dht(2, DHT22);   // pin data 2, jenis sensor DHT22
+
+void setup() {
+  Serial.begin(9600);
+  dht.begin();
+}
+
+void loop() {
+  delay(2000);                        // DHT22 hanya boleh dibaca tiap 2 detik
+  float suhu = dht.readTemperature();   // °C
+  float lembap = dht.readHumidity();    // %
+  if (isnan(suhu) || isnan(lembap)) {
+    Serial.println("Gagal membaca DHT22, periksa kabel dan pin");
+    return;
+  }
+  Serial.print("suhu:");
+  Serial.print(suhu);
+  Serial.print(",kelembapan:");
+  Serial.println(lembap);
 }
 `,
   },

@@ -149,13 +149,15 @@ const LIBRARY_TYPES: Record<string, string> = {
   SoftwareSerial: "SoftwareSerial.h",
   TwoWire: "Wire.h",
   SPISettings: "SPI.h",
+  DHT: "DHT.h",
 };
 
-// Library yang tersedia di server compile (Servo dan LiquidCrystal dipasang
-// di Dockerfile, sisanya bawaan core Arduino AVR)
+// Library yang tersedia di server compile (Servo, LiquidCrystal, dan DHT
+// dipasang di Dockerfile, sisanya bawaan core Arduino AVR)
 const AVAILABLE_LIBRARIES = [
   "Servo.h",
   "LiquidCrystal.h",
+  "DHT.h",
   "Wire.h",
   "SPI.h",
   "EEPROM.h",

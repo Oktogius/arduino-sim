@@ -55,6 +55,9 @@ import { createGallery } from "./gallery";
 import { explainErrors } from "./explain";
 import { createExplainPanel } from "./explainPanel";
 import { SerialPlotter } from "./plotter";
+import { ldrVoltage } from "./ldr";
+import { Ultrasonic } from "./ultrasonic";
+import { Dht22 } from "./dht22";
 
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   <h1>Arduino Sim</h1>
@@ -73,6 +76,9 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     <button class="secondary small" data-add="pot">+ Potensiometer</button>
     <button class="secondary small" data-add="servo">+ Servo</button>
     <button class="secondary small" data-add="lcd">+ LCD</button>
+    <button class="secondary small" data-add="ldr">+ LDR</button>
+    <button class="secondary small" data-add="ultrasonic">+ HC-SR04</button>
+    <button class="secondary small" data-add="dht22">+ DHT22</button>
     <label class="toggle" title="Tiru getaran kontak tombol asli (1-5 ms)">
       <input id="bounce-toggle" type="checkbox" /> Bouncing
     </label>
@@ -191,6 +197,10 @@ const servoMeters = new Map<number, PulseMeter>();
 // Chip LCD per komponen, beserta kondisi pin E sebelumnya (untuk mendeteksi E turun)
 const lcds = new Map<number, { chip: HD44780; lastE: boolean }>();
 
+// Sensor yang menjawab sinyal dari Arduino (dibuat ulang setiap Run)
+const ultrasonics = new Map<number, Ultrasonic>();
+const dhts = new Map<number, Dht22>();
+
 // Apakah pin sedang HIGH (dikeluarkan Arduino sebagai output HIGH)
 function isHigh(pin: string): boolean {
   const { port, bit } = PINS[pin];
@@ -236,6 +246,10 @@ function onPortChange() {
       updateLcd(part);
       continue;
     }
+    if (part.type === "ultrasonic" || part.type === "dht22") {
+      if (activeCpu) updateSensor(part, activeCpu);
+      continue;
+    }
     if (part.type !== "led" && part.type !== "servo") continue;
     const high = isHigh(part.pins[0]);
 
@@ -256,8 +270,50 @@ function onPortChange() {
 // Rangkaian virtual: tombol ke GND, dipakai dengan INPUT_PULLUP.
 // Dilepas = HIGH, ditekan = LOW (active low).
 function setButtonPin(part: Part, level: boolean) {
-  const { port, bit } = PINS[part.pins[0]];
+  setInputPin(part.pins[0], level);
+}
+
+// Level yang "dikirim" komponen ke pin input Arduino
+function setInputPin(pin: string, level: boolean) {
+  const { port, bit } = PINS[pin];
   ports[port]?.setPin(bit, level);
+}
+
+// --- Sensor HC-SR04 dan DHT22 ---
+// Keduanya menunggu sinyal dari Arduino (pulsa TRIG / sinyal start), lalu
+// menjawab dengan pulsa yang dijadwalkan dalam siklus CPU.
+function updateSensor(part: Part, cpu: CPU) {
+  if (part.type === "ultrasonic") {
+    let sensor = ultrasonics.get(part.id);
+    if (!sensor) ultrasonics.set(part.id, (sensor = new Ultrasonic()));
+    const [trig, echo] = part.pins;
+    sensor.update(
+      isHigh(trig),
+      cpu,
+      () => board.distance(part.id),
+      (level) => setInputPin(echo, level),
+    );
+  } else {
+    let sensor = dhts.get(part.id);
+    if (!sensor) dhts.set(part.id, (sensor = new Dht22()));
+    const pin = part.pins[0];
+    const { port, bit } = PINS[pin];
+    // Sinyal start: Arduino menjadikan pin OUTPUT dan menariknya LOW
+    const pulledLow = ports[port]?.pinState(bit) === PinState.Low;
+    sensor.update(
+      pulledLow,
+      cpu,
+      () => board.climate(part.id),
+      (level) => setInputPin(pin, level),
+    );
+  }
+}
+
+// --- LDR ---
+// Modul LDR: tegangan di pin AO turun saat cahaya makin terang (lihat ldr.ts)
+function onLdr(part: Part, lux: number) {
+  const channel = PINS[part.pins[0]].adc!;
+  if (adc) adc.channelValues[channel] = ldrVoltage(lux);
 }
 
 // Getaran yang sedang berlangsung, per tombol (kunci = id komponen)
@@ -298,6 +354,9 @@ function syncInputs() {
   for (const part of board.parts()) {
     if (part.type === "button") setButtonPin(part, !board.isPressed(part.id));
     if (part.type === "pot") onPot(part, board.potRaw(part.id));
+    if (part.type === "ldr") onLdr(part, board.lux(part.id));
+    if (part.type === "ultrasonic") setInputPin(part.pins[1], false); // ECHO diam = LOW
+    if (part.type === "dht22") setInputPin(part.pins[0], true); // jalur data ditarik pull-up
   }
 }
 
@@ -306,6 +365,7 @@ function syncInputs() {
 const board = createBoard(boardEl, loadSavedCircuit() ?? defaultCircuit(), {
   onButton,
   onPot,
+  onLdr,
   onEdit: saveCircuit,
 });
 
@@ -379,6 +439,8 @@ function run(hex: string) {
     if (part.type === "led") ledMeters.set(part.id, new DutyMeter(cpu.cycles));
   }
   lcds.clear(); // LCD baru setiap Run: seperti listrik baru dinyalakan
+  ultrasonics.clear();
+  dhts.clear();
 
   // Ketiga port dibuat semua, karena LED dan tombol bisa di pin mana saja.
   // Setiap kali port berubah, tampilan LED dan servo diperbarui.
