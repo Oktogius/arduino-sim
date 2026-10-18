@@ -49,35 +49,8 @@ import {
 } from "./servo";
 import { HD44780 } from "./lcd";
 import { DutyMeter } from "./pwm";
-
-const DEFAULT_CODE = `// Putar potensiometer untuk mengatur kecepatan kedip LED.
-// Tahan tombol untuk membuat LED menyala terus.
-void setup() {
-  Serial.begin(9600);
-  pinMode(2, INPUT_PULLUP);
-  pinMode(13, OUTPUT);
-}
-
-void loop() {
-  int pot = analogRead(A0);              // 0..1023
-  bool ditekan = digitalRead(2) == LOW;
-
-  Serial.print("A0 = ");
-  Serial.print(pot);
-  Serial.println(ditekan ? "  [tombol ditekan]" : "");
-
-  if (ditekan) {
-    digitalWrite(13, HIGH);
-    delay(100);
-  } else {
-    int jeda = pot / 4 + 50;             // 50..305 ms
-    digitalWrite(13, HIGH);
-    delay(jeda);
-    digitalWrite(13, LOW);
-    delay(jeda);
-  }
-}
-`;
+import { EXAMPLES, DEFAULT_EXAMPLE, type Example } from "./examples";
+import { createGallery } from "./gallery";
 
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   <h1>Arduino Sim</h1>
@@ -86,9 +59,10 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     <button id="run">Compile &amp; Run</button>
     <button id="stop" disabled>Stop</button>
     <button id="share" class="secondary">Bagikan</button>
-    <button id="example" class="secondary">Contoh</button>
+    <button id="example" class="secondary">Contoh ▾</button>
     <span id="status">Siap</span>
   </div>
+  <p id="example-note" class="example-note"></p>
   <div class="board-toolbar">
     <button class="secondary small" data-add="led">+ LED</button>
     <button class="secondary small" data-add="button">+ Tombol</button>
@@ -118,6 +92,8 @@ const stopBtn = document.querySelector<HTMLButtonElement>("#stop")!;
 const statusEl = document.querySelector<HTMLSpanElement>("#status")!;
 const shareBtn = document.querySelector<HTMLButtonElement>("#share")!;
 const exampleBtn = document.querySelector<HTMLButtonElement>("#example")!;
+const exampleNoteEl =
+  document.querySelector<HTMLParagraphElement>("#example-note")!;
 const outputEl = document.querySelector<HTMLPreElement>("#output")!;
 const serialEl = document.querySelector<HTMLPreElement>("#serial")!;
 const clearBtn = document.querySelector<HTMLButtonElement>("#clear")!;
@@ -131,7 +107,7 @@ const bounceToggle =
 
 // Urutan kode awal: simpanan lokal, kalau tidak ada pakai contoh bawaan.
 // Kode dari link berbagi dibaca sesudahnya (prosesnya async).
-const editor = createEditor(editorEl, loadSavedCode() ?? DEFAULT_CODE);
+const editor = createEditor(editorEl, loadSavedCode() ?? DEFAULT_EXAMPLE.code);
 
 // Simpan otomatis setengah detik setelah berhenti mengetik (debounce),
 // supaya tidak menulis ke localStorage di setiap ketukan tombol.
@@ -428,6 +404,9 @@ runBtn.addEventListener("click", async () => {
   serialEl.textContent = "";
   statusEl.textContent = "Compiling...";
   runBtn.disabled = true;
+  // Selama compile, contoh tidak bisa dimuat: kalau rangkaian diganti di
+  // tengah compile, kode lama akan berjalan di rangkaian baru.
+  exampleBtn.disabled = true;
   clearCompileErrors(editor);
   try {
     const hex = await compile(editor.getValue());
@@ -442,6 +421,7 @@ runBtn.addEventListener("click", async () => {
     showCompileErrors(editor, message); // garis merah di baris yang error
   } finally {
     runBtn.disabled = false;
+    exampleBtn.disabled = false;
   }
 });
 
@@ -462,16 +442,50 @@ shareBtn.addEventListener("click", async () => {
   }
 });
 
-// Contoh: kembalikan kode bawaan. Memakai executeEdits (bukan setValue)
-// supaya bisa dibatalkan dengan Ctrl+Z.
-exampleBtn.addEventListener("click", () => {
+// --- Galeri contoh: kode DAN rangkaian dimuat bersamaan ---
+function loadExample(example: Example) {
   const model = editor.getModel();
-  if (!model) return;
+  // Rangkaian contoh tetap diperiksa seperti data dari link (circuit.ts)
+  const parts = decodeCircuit(example.circuit);
+  if (!model || !parts) {
+    statusEl.textContent = `Contoh "${example.title}" rusak, tidak dimuat`;
+    return;
+  }
+
+  // Rangkaian hanya boleh diganti saat emulator berhenti
+  const wasRunning = running;
+  if (wasRunning) stop();
+
+  board.setParts(parts);
+  saveCircuit(parts);
+  if (example.bounce) bounceToggle.checked = true;
+
+  // executeEdits (bukan setValue) supaya bisa dibatalkan dengan Ctrl+Z.
+  // pushUndoStop di depan dan belakang: penggantian kode menjadi satu langkah
+  // undo sendiri, tidak tergabung dengan ketikan sebelum/sesudahnya.
+  editor.pushUndoStop();
   editor.executeEdits("contoh", [
-    { range: model.getFullModelRange(), text: DEFAULT_CODE },
+    { range: model.getFullModelRange(), text: example.code },
   ]);
+  editor.pushUndoStop();
+  editor.setPosition({ lineNumber: 1, column: 1 });
+  editor.revealLine(1);
   editor.focus();
-});
+
+  // Pesan error dan tanda merah milik kode lama tidak berlaku lagi
+  clearCompileErrors(editor);
+  outputEl.textContent = "";
+
+  const libs = example.libraries.map((lib) => `<${lib}.h>`).join(", ");
+  exampleNoteEl.textContent =
+    `${example.title}: ${example.howTo}` +
+    (libs ? ` Memakai library ${libs}.` : "");
+  statusEl.textContent =
+    (wasRunning ? "Emulator dihentikan. " : "") +
+    "Contoh dimuat (Ctrl+Z di editor mengembalikan kode lama)";
+}
+
+createGallery(exampleBtn, EXAMPLES, loadExample);
 
 clearBtn.addEventListener("click", () => {
   serialEl.textContent = "";
