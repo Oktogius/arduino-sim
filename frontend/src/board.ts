@@ -226,9 +226,14 @@ export function createBoard(
       refreshPinOptions();
     },
 
-    setLed(id: number, on: boolean) {
+    // brightness 0..1 (1 = menyala penuh). Hanya diubah kalau berbeda,
+    // karena dipanggil setiap frame untuk setiap LED.
+    setLed(id: number, brightness: number) {
       const led = find(id)?.led;
-      if (led && led.value !== on) led.value = on;
+      if (!led) return;
+      const on = brightness > 0;
+      if (led.value !== on) led.value = on;
+      if (on && led.brightness !== brightness) led.brightness = brightness;
     },
 
     // Sudut servo dan pembacaannya, misalnya "90° · 1472 µs".
@@ -257,7 +262,10 @@ export function createBoard(
     // Saat emulator berhenti: LED padam, layar LCD kosong (seperti listrik dicabut)
     outputsOff() {
       for (const e of entries) {
-        if (e.led) e.led.value = false;
+        if (e.led) {
+          e.led.value = false;
+          e.readout.textContent = "";
+        }
         if (e.lcd) {
           e.lcd.characters = new Uint8Array(32).fill(0x20);
           e.lcd.cursor = e.lcd.blink = false;
@@ -270,7 +278,8 @@ export function createBoard(
 
     setReadout(id: number, text: string) {
       const entry = find(id);
-      if (entry) entry.readout.textContent = text;
+      if (entry && entry.readout.textContent !== text)
+        entry.readout.textContent = text;
     },
   };
 }

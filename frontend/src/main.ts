@@ -48,6 +48,7 @@ import {
   pulseToAngle,
 } from "./servo";
 import { HD44780 } from "./lcd";
+import { DutyMeter } from "./pwm";
 
 const DEFAULT_CODE = `// Putar potensiometer untuk mengatur kecepatan kedip LED.
 // Tahan tombol untuk membuat LED menyala terus.
@@ -157,6 +158,9 @@ let usartRx: AVRUSART | null = null;
 let rxQueue: number[] = [];
 
 // --- Output: LED, servo, dan LCD ---
+// Pengukur kecerahan per LED (kunci = id komponen), dibuat ulang setiap Run
+const ledMeters = new Map<number, DutyMeter>();
+
 // Pengukur pulsa per servo (kunci = id komponen), dibuat ulang setiap Run
 const servoMeters = new Map<number, PulseMeter>();
 
@@ -186,9 +190,15 @@ function updateLcd(part: Part) {
   lcd.lastE = eHigh;
 }
 
-// Gambar layar LCD yang berubah. Dipanggil sekali per frame, bukan setiap
-// pulsa E: satu lcd.print("Halo") saja sudah 8 pulsa (batching, Bab 6.2).
-function renderLcds() {
+// Gambar LED dan LCD sekali per frame (batching, Bab 6.2).
+// - LED: kecerahan = bagian waktu pin HIGH selama frame (PWM, lihat pwm.ts)
+// - LCD: hanya kalau isinya berubah; satu lcd.print("Halo") saja sudah 8 pulsa E
+function renderOutputs(now: number) {
+  for (const [id, meter] of ledMeters) {
+    const { duty, pwm } = meter.endFrame(now);
+    board.setLed(id, duty);
+    board.setReadout(id, pwm ? `PWM ${Math.round(duty * 100)}%` : "");
+  }
   for (const [id, { chip }] of lcds) {
     if (chip.dirty) board.setLcd(id, chip.view());
   }
@@ -205,9 +215,10 @@ function onPortChange() {
     if (part.type !== "led" && part.type !== "servo") continue;
     const high = isHigh(part.pins[0]);
 
+    if (!activeCpu) continue;
     if (part.type === "led") {
-      board.setLed(part.id, high);
-    } else if (activeCpu) {
+      ledMeters.get(part.id)?.update(high, activeCpu.cycles);
+    } else {
       // Servo: ukur lebar pulsa dalam siklus CPU, lalu ubah jadi sudut
       let meter = servoMeters.get(part.id);
       if (!meter) servoMeters.set(part.id, (meter = createPulseMeter()));
@@ -339,6 +350,10 @@ function run(hex: string) {
   new AVRTimer(cpu, timer1Config); // dibutuhkan library Servo.h
   new AVRTimer(cpu, timer2Config); // analogWrite() di pin 3 dan 11, tone()
   servoMeters.clear();
+  ledMeters.clear();
+  for (const part of board.parts()) {
+    if (part.type === "led") ledMeters.set(part.id, new DutyMeter(cpu.cycles));
+  }
   lcds.clear(); // LCD baru setiap Run: seperti listrik baru dinyalakan
 
   // Ketiga port dibuat semua, karena LED dan tombol bisa di pin mana saja.
@@ -378,7 +393,7 @@ function run(hex: string) {
     }
     // Cadangan: coba kirim antrean serial sekali per frame
     pumpRx();
-    renderLcds();
+    renderOutputs(cpu.cycles);
 
     // Batching: tampilkan teks serial sekali per frame
     if (serialBuffer) {
